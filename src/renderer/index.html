@@ -14,9 +14,14 @@
     <div id="tabs" role="tablist" aria-label="Pestanas de terminal"></div>
     <button id="btn-new-tab" class="icon-btn" title="Nueva pestana (Ctrl+Shift+T)" aria-label="Nueva pestana">+</button>
 
+    <div class="group" role="group" aria-label="Dividir">
+      <button id="btn-split-right" class="icon-btn" title="Dividir a la derecha (Alt+Shift++)" aria-label="Dividir a la derecha">&#9704;</button>
+      <button id="btn-split-down" class="icon-btn" title="Dividir abajo (Alt+Shift+-)" aria-label="Dividir abajo">&#11027;</button>
+    </div>
+
     <div class="spacer"></div>
 
-    <select id="shell-select" title="Shell para las nuevas pestanas" aria-label="Shell"></select>
+    <select id="shell-select" title="Shell para las nuevas pestanas y paneles" aria-label="Shell"></select>
 
     <div class="group" role="group" aria-label="Tamano de fuente">
       <button id="btn-font-minus" class="icon-btn" title="Reducir fuente (Ctrl+-)" aria-label="Reducir fuente">A&minus;</button>
@@ -57,7 +62,7 @@
     <div class="drop-card">
       <div class="drop-icon">&#128193;</div>
       <div class="drop-title">Suelta los archivos aqui</div>
-      <div class="drop-sub">Se insertaran sus rutas completas en el terminal</div>
+      <div class="drop-sub">Se insertaran sus rutas completas en el panel activo</div>
     </div>
   </div>
 
@@ -156,17 +161,53 @@
           </label>
           <label class="row check">
             <input id="set-confirmClose" type="checkbox" />
-            <span>Confirmar antes de cerrar una pestana activa</span>
+            <span>Confirmar antes de cerrar un panel activo</span>
           </label>
+        </section>
+
+        <section>
+          <h3>Sesion y ventana</h3>
+          <label class="row check">
+            <input id="set-restoreSession" type="checkbox" />
+            <span>Reabrir las pestanas y paneles de la ultima sesion</span>
+          </label>
+          <label class="row check">
+            <input id="set-rememberWindow" type="checkbox" />
+            <span>Recordar tamano y posicion de la ventana</span>
+          </label>
+          <label class="row check">
+            <input id="set-globalHotkeyEnabled" type="checkbox" />
+            <span>Atajo global para mostrar/ocultar AdminTerm</span>
+          </label>
+          <label class="row">
+            <span>Combinacion</span>
+            <span class="inline">
+              <input id="set-globalHotkey" type="text" spellcheck="false" placeholder="Control+Alt+T" />
+              <button id="btn-hotkey-apply" class="ghost small">Aplicar</button>
+            </span>
+          </label>
+          <p class="hint">
+            Funciona aunque AdminTerm este en segundo plano. Ejemplos validos:
+            <code>Control+Alt+T</code>, <code>Super+Grave</code>, <code>Control+Shift+Space</code>.
+          </p>
         </section>
 
         <section>
           <h3>Microfono (dictado)</h3>
           <p class="hint">
-            El audio se graba localmente y se envia al endpoint de transcripcion que configures
-            (compatible con la API de OpenAI: OpenAI, Groq, o tu propio servidor Whisper).
-            El texto resultante se escribe en el terminal.
+            El audio se graba localmente y se envia al endpoint de transcripcion que configures.
+            El texto resultante se escribe en el panel activo.
           </p>
+          <label class="row">
+            <span>Proveedor</span>
+            <select id="set-stt-preset">
+              <option value="openai">OpenAI (whisper-1)</option>
+              <option value="openai-4o">OpenAI (gpt-4o-mini-transcribe)</option>
+              <option value="groq">Groq (whisper-large-v3-turbo)</option>
+              <option value="local">Servidor local (sin API key)</option>
+              <option value="custom">Personalizado</option>
+            </select>
+          </label>
           <label class="row">
             <span>Endpoint</span>
             <input id="set-stt-endpoint" type="text" spellcheck="false" />
@@ -177,7 +218,10 @@
           </label>
           <label class="row">
             <span>API key</span>
-            <input id="set-stt-apiKey" type="password" spellcheck="false" placeholder="sk-..." />
+            <span class="inline">
+              <input id="set-stt-apiKey" type="password" spellcheck="false" placeholder="sk-..." />
+              <button id="btn-stt-test" class="ghost small">Probar</button>
+            </span>
           </label>
           <label class="row">
             <span>Idioma</span>
@@ -195,9 +239,8 @@
             <span>Enviar automaticamente (Enter) tras transcribir</span>
           </label>
           <p class="hint">
-            Sin API key puedes usar el dictado nativo de Windows (Win+H), pero Windows
-            bloquea la escritura del dictado en ventanas elevadas: solo funciona si abres
-            AdminTerm en modo normal.
+            "Probar" envia un audio de un segundo generado al vuelo para comprobar
+            endpoint y credenciales, sin usar el microfono.
           </p>
         </section>
 
@@ -205,8 +248,10 @@
           <h3>Atajos</h3>
           <ul class="shortcuts">
             <li><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>T</kbd> nueva pestana</li>
-            <li><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>W</kbd> cerrar pestana</li>
-            <li><kbd>Ctrl</kbd>+<kbd>Tab</kbd> siguiente pestana</li>
+            <li><kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>+</kbd> / <kbd>-</kbd> dividir a la derecha / abajo</li>
+            <li><kbd>Alt</kbd>+<kbd>&larr;</kbd><kbd>&rarr;</kbd><kbd>&uarr;</kbd><kbd>&darr;</kbd> moverse entre paneles</li>
+            <li><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>W</kbd> cerrar el panel activo</li>
+            <li><kbd>Ctrl</kbd>+<kbd>Tab</kbd> / <kbd>Ctrl</kbd>+<kbd>1..9</kbd> cambiar de pestana</li>
             <li><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>C</kbd> / <kbd>V</kbd> copiar / pegar</li>
             <li><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>F</kbd> buscar</li>
             <li><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>M</kbd> microfono</li>

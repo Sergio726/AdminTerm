@@ -26,7 +26,7 @@ y genera el icono.
 | --- | --- |
 | Arranque normal (pide UAC) | `npm start` o doble clic en `Iniciar-AdminTerm.bat` |
 | Sin pedir administrador | `npm run start:normal` |
-| Comprobar que todo funciona | `npm run selftest` (18 comprobaciones, sin abrir ventana) |
+| Comprobar que todo funciona | `npm run selftest` (28 comprobaciones, sin abrir ventana) |
 | Acceso directo en Escritorio + Inicio | `powershell -ExecutionPolicy Bypass -File Crear-acceso-directo.ps1` |
 | Generar un `.exe` distribuible | `npm run build` (portable) o `npm run dist` (instalador) |
 
@@ -67,8 +67,21 @@ rutas absolutas entrecomilladas en el prompt — que es justo lo que Claude Code
 Codex necesitan para leerlos. También puedes arrastrar y soltar archivos sobre la
 ventana.
 
+**Paneles divididos.** Divide una pestaña a la derecha o abajo (hasta 4 paneles),
+arrastra el divisor para repartir el espacio y muévete entre paneles con
+`Alt`+flechas. Cada panel es una shell independiente: Claude en uno, el repo en
+el otro. Los paneles anidados (dividir un panel ya dividido en el otro eje) no
+están soportados; para eso, abre otra pestaña.
+
+**Reabre donde lo dejaste.** Al cerrar guarda qué pestañas y paneles tenías, con
+sus proporciones, y los reconstruye al abrir. También recuerda el tamaño y la
+posición de la ventana.
+
+**Atajo global.** Opcional, para traer AdminTerm al frente desde cualquier sitio
+(por defecto `Control+Alt+T`, configurable).
+
 **Pestañas**, búsqueda en el scrollback, zoom con `Ctrl`+rueda y ajustes que se
-aplican en vivo a todas las pestañas.
+aplican en vivo a todos los paneles abiertos.
 
 ---
 
@@ -76,7 +89,10 @@ aplican en vivo a todas las pestañas.
 
 | Atajo | Acción |
 | --- | --- |
-| `Ctrl+Shift+T` / `Ctrl+Shift+W` | Nueva pestaña / cerrar pestaña |
+| `Ctrl+Shift+T` | Nueva pestaña |
+| `Alt+Shift++` / `Alt+Shift+-` | Dividir a la derecha / abajo |
+| `Alt`+flechas | Moverse entre paneles |
+| `Ctrl+Shift+W` | Cerrar el panel activo (o la pestaña si es el último) |
 | `Ctrl+Tab` / `Ctrl+1..9` | Cambiar de pestaña |
 | `Ctrl+Shift+C` / `Ctrl+Shift+V` | Copiar / pegar (`Ctrl+C` queda libre para las CLI) |
 | `Ctrl+Shift+F` | Buscar |

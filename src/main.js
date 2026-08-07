@@ -1,6 +1,8 @@
 'use strict';
 
-const { app, BrowserWindow, ipcMain, dialog, shell, Menu, clipboard } = require('electron');
+const {
+  app, BrowserWindow, ipcMain, dialog, shell, Menu, clipboard, globalShortcut, screen,
+} = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -35,6 +37,12 @@ const DEFAULTS = {
   scrollback: 20000,
   highContrast: true,
   confirmClose: true,
+  restoreSession: true,
+  rememberWindow: true,
+  globalHotkeyEnabled: false,
+  globalHotkey: 'Control+Alt+T',
+  session: null,
+  bounds: null,
   stt: {
     endpoint: 'https://api.openai.com/v1/audio/transcriptions',
     model: 'whisper-1',
@@ -330,10 +338,50 @@ function sendWinH() {
 let mainWindow = null;
 const SELFTEST = process.argv.includes('--selftest');
 
+/** Muestra, oculta o trae al frente la ventana (atajo global). */
+function toggleWindow() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  if (mainWindow.isVisible() && mainWindow.isFocused()) {
+    mainWindow.hide();
+  } else {
+    mainWindow.show();
+    mainWindow.focus();
+  }
+}
+
+function applyGlobalHotkey() {
+  globalShortcut.unregisterAll();
+  const s = getSettings();
+  if (!s.globalHotkeyEnabled || !s.globalHotkey) return { ok: true, registered: false };
+  try {
+    return { ok: true, registered: globalShortcut.register(s.globalHotkey, toggleWindow) };
+  } catch (err) {
+    // Electron lanza si la combinacion no es valida (p.ej. "Ctrl+Foo").
+    return { ok: false, registered: false, error: err.message };
+  }
+}
+
+/** Solo reutiliza la geometria guardada si sigue cayendo en algun monitor. */
+function usableBounds() {
+  const s = getSettings();
+  if (!s.rememberWindow || !s.bounds) return null;
+  const b = s.bounds;
+  if (!Number.isFinite(b.width) || !Number.isFinite(b.height) || b.width < 400 || b.height < 300) return null;
+  const visible = screen.getAllDisplays().some((d) => {
+    const a = d.workArea;
+    return b.x + b.width > a.x && b.x < a.x + a.width && b.y + b.height > a.y && b.y < a.y + a.height;
+  });
+  return visible ? b : null;
+}
+
 function createWindow() {
+  const saved = usableBounds();
   mainWindow = new BrowserWindow({
-    width: 1180,
-    height: 760,
+    width: saved ? saved.width : 1180,
+    height: saved ? saved.height : 760,
+    x: saved ? saved.x : undefined,
+    y: saved ? saved.y : undefined,
     minWidth: 620,
     minHeight: 380,
     show: false,
@@ -378,10 +426,23 @@ function createWindow() {
     }
   });
 
+  // En --selftest la ventana se coloca fuera de pantalla para capturarla, y
+  // esa geometria no debe quedar guardada.
+  mainWindow.on('close', () => {
+    if (SELFTEST || !getSettings().rememberWindow || mainWindow.isDestroyed()) return;
+    try {
+      saveSettings({ bounds: mainWindow.getNormalBounds() });
+    } catch (err) {
+      console.error('[bounds] no se pudo guardar:', err.message);
+    }
+  });
+
   mainWindow.on('closed', () => {
     killAllSessions();
     mainWindow = null;
   });
+
+  applyGlobalHotkey();
 }
 
 // Se evalua dentro del renderer: ejerce arranque, PTY, pestanas, ajustes en
@@ -433,6 +494,84 @@ const SELFTEST_SCRIPT = String.raw`
 
   // --- fuentes monoespaciadas detectadas en el sistema ---
   add('fuentes detectadas', app.fonts.length > 0, app.fonts.join(', ') || 'ninguna');
+
+  // --- paneles divididos ---
+  const split = await app.splitActive('row');
+  const splitOk = !!split && app.activeTab.panes.length === 2 && app.activeTab.direction === 'row';
+  add('dividir panel', splitOk,
+    splitOk ? '2 paneles en fila' : 'no se dividio: ' + (app.lastPaneError || 'motivo desconocido'));
+
+  if (splitOk) {
+    const second = app.activePane;
+    app.movePaneFocus('arrowleft');
+    const moved = app.activePane !== second;
+    app.movePaneFocus('arrowright');
+    add('foco entre paneles', moved && app.activePane === second, 'Alt+flechas cambia de panel');
+
+    const dividers = app.activeTab.view.querySelectorAll('.pane-divider').length;
+    add('divisor visible', dividers === 1, dividers + ' divisor(es) entre 2 paneles');
+
+    // Los dos paneles deben tener PTY propio y ancho parecido.
+    const ids = new Set(app.activeTab.panes.map((p) => p.id));
+    const widths = app.activeTab.panes.map((p) => p.el.getBoundingClientRect().width);
+    const balanced = Math.abs(widths[0] - widths[1]) < Math.max(widths[0], widths[1]) * 0.2;
+    add('paneles independientes', ids.size === 2 && balanced,
+      'PTYs distintos, anchos ' + widths.map((w) => Math.round(w)).join('/'));
+
+    // Los paneles deben llenar el alto disponible, y el terminal el panel.
+    const viewH = app.activeTab.view.getBoundingClientRect().height;
+    const paneH = app.activeTab.panes.map((p) => p.el.getBoundingClientRect().height);
+    // Un choque de clases CSS ya rompio esto una vez: si vuelve a fallar,
+    // el detalle trae los estilos calculados para no tener que adivinar.
+    const fullHeight = paneH.every((h) => h > viewH * 0.95);
+    let detail = 'vista=' + Math.round(viewH) + ' paneles=' + paneH.map((h) => Math.round(h)).join('/');
+    if (!fullHeight) {
+      const cs = getComputedStyle(app.activeTab.view);
+      const ps = getComputedStyle(app.activeTab.panes[0].el);
+      detail += ' [view: ' + cs.display + '/' + cs.flexDirection + '/align-items:' + cs.alignItems +
+        ' | pane: align-self:' + ps.alignSelf + ' height:' + ps.height + ' flex:' + ps.flex + ']';
+    }
+    add('paneles a toda altura', fullHeight, detail);
+
+    const screenH = app.activeTab.panes.map((p) => {
+      const s = p.el.querySelector('.xterm-screen');
+      return s ? s.getBoundingClientRect().height : 0;
+    });
+    add('terminal llena el panel', screenH.every((h, i) => h > paneH[i] * 0.9),
+      'terminal=' + screenH.map((h) => Math.round(h)).join('/') + ' filas=' +
+      app.activeTab.panes.map((p) => p.term.rows).join('/'));
+
+    app.destroyPane(app.activePane);
+    await sleep(250);
+    add('cerrar panel', app.activeTab.panes.length === 1, 'queda 1 panel');
+  }
+
+  // --- instantanea de sesion (lo que se reabrira al arrancar) ---
+  const snap = app.layoutSnapshot();
+  add('instantanea de sesion',
+    Array.isArray(snap.tabs) && snap.tabs.length === app.tabs.length && !!snap.tabs[0].panes[0].shellKey,
+    snap.tabs.length + ' pestana(s), shell=' + snap.tabs[0].panes[0].shellKey);
+
+  // --- reapertura: reconstruir una disposicion guardada ---
+  const before = app.tabs.length;
+  await app.restoreSession({
+    activeIndex: 0,
+    tabs: [{ direction: 'column', panes: [{ shellKey: 'powershell', flex: 2 }, { shellKey: 'powershell', flex: 1 }] }],
+  });
+  const rebuilt = app.tabs[app.tabs.length - 1];
+  const restoreOk =
+    app.tabs.length === before + 1 && rebuilt.panes.length === 2 &&
+    rebuilt.direction === 'column' && rebuilt.panes[0].flex === 2;
+  add('reabrir sesion', restoreOk,
+    restoreOk ? '2 paneles en columna con proporcion 2:1' : 'no se reconstruyo la disposicion');
+  app.destroyTab(rebuilt);
+  await sleep(200);
+
+  // --- audio de prueba del microfono: debe ser un WAV valido ---
+  const wav = app.probeAudioWav();
+  const riff = String.fromCharCode(...wav.slice(0, 4)) + String.fromCharCode(...wav.slice(8, 12));
+  add('audio de prueba', riff === 'RIFFWAVE' && wav.length === 44 + 16000 * 2,
+    'WAV mono 16 kHz, ' + wav.length + ' bytes');
 
   // --- segunda pestana ---
   const t1 = await app.newTab();
@@ -523,13 +662,23 @@ async function maybeScreenshot(win) {
   win.show();
   await wait(700);
 
-  // Algo de salida real para que la captura muestre el terminal en uso.
+  // Algo de salida real, y con la pestana dividida, para que la captura
+  // muestre la app como se usa de verdad.
   const [first] = [...sessions.values()];
   if (first) {
-    first.proc.write('Get-ChildItem $env:USERPROFILE | Select-Object -First 6 Mode,Length,Name\r');
-    await wait(1600);
+    first.proc.write('Get-ChildItem $env:USERPROFILE | Select-Object -First 5 Mode,Length,Name\r');
+    await wait(1500);
     first.proc.write('claude --version; node --version\r');
-    await wait(2500);
+    await wait(2000);
+  }
+
+  // El valor devuelto viaja por IPC: hay que resolver a algo clonable.
+  await win.webContents.executeJavaScript("window.__adminTerm.splitActive('row').then(() => true)");
+  await wait(1500);
+  const second = [...sessions.values()].pop();
+  if (second && second !== first) {
+    second.proc.write('git -C "' + process.cwd().replace(/\\/g, '\\\\') + '" log --oneline -3\r');
+    await wait(2200);
   }
 
   const shoot = async (file) => {
@@ -644,6 +793,9 @@ app.on('before-quit', killAllSessions);
 ipcMain.handle('app:info', () => ({
   elevated,
   uacDenied,
+  // En modo prueba no se reabre ni se guarda la sesion: el resultado debe
+  // depender solo del codigo, no de lo que quedara guardado del run anterior.
+  selftest: SELFTEST,
   version: app.getVersion(),
   electron: process.versions.electron,
   node: process.versions.node,
@@ -727,6 +879,8 @@ ipcMain.handle('sys:relaunchElevated', () => {
   }
   return { ok: false, error: 'UAC cancelado o bloqueado por politica del sistema.' };
 });
+
+ipcMain.handle('sys:applyHotkey', () => applyGlobalHotkey());
 
 ipcMain.handle('sys:openExternal', (_e, url) => {
   if (/^https?:/i.test(url)) shell.openExternal(url);

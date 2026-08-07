@@ -51,6 +51,7 @@ contextBridge.exposeInMainWorld('adminterm', {
 
   // --- sistema ---
   relaunchElevated: () => ipcRenderer.invoke('sys:relaunchElevated'),
+  applyHotkey: () => ipcRenderer.invoke('sys:applyHotkey'),
   openExternal: (url) => ipcRenderer.invoke('sys:openExternal', url),
   writeClipboard: (text) => ipcRenderer.invoke('clipboard:write', text),
   readClipboard: () => ipcRenderer.invoke('clipboard:read'),

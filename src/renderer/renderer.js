@@ -9,7 +9,7 @@ const api = window.adminterm;
 const THEMES = {
   oscuro: {
     background: '#0b0e14', foreground: '#e6edf3',
-    cursor: '#ffb454', cursorAccent: '#0b0e14',
+    cursor: '#39ff14', cursorAccent: '#0b0e14',
     selectionBackground: '#33415e', selectionForeground: '#ffffff',
     black: '#3d4451', red: '#ff6b6b', green: '#7ee787', yellow: '#ffd580',
     blue: '#73b8ff', magenta: '#d2a8ff', cyan: '#5ccfe6', white: '#e6edf3',
@@ -18,7 +18,7 @@ const THEMES = {
   },
   'oscuro-suave': {
     background: '#1b1f27', foreground: '#dfe5ec',
-    cursor: '#7ee787', cursorAccent: '#1b1f27',
+    cursor: '#39ff14', cursorAccent: '#1b1f27',
     selectionBackground: '#3a4557', selectionForeground: '#ffffff',
     black: '#4a5262', red: '#ff7b7b', green: '#8ce99a', yellow: '#ffd88a',
     blue: '#82c0ff', magenta: '#d7b0ff', cyan: '#6fd7ea', white: '#dfe5ec',
@@ -27,7 +27,7 @@ const THEMES = {
   },
   claro: {
     background: '#ffffff', foreground: '#1c1f24',
-    cursor: '#0b6a8c', cursorAccent: '#ffffff',
+    cursor: '#0f8a2e', cursorAccent: '#ffffff',
     selectionBackground: '#cfe4ff', selectionForeground: '#0d1117',
     black: '#24292f', red: '#b81f1f', green: '#116329', yellow: '#7a5000',
     blue: '#0a4fa8', magenta: '#6f2da8', cyan: '#0b6a8c', white: '#57606a',
@@ -42,6 +42,13 @@ const FONT_CANDIDATES = [
   'Lucida Console', 'Courier New',
 ];
 
+const STT_PRESETS = {
+  openai: { endpoint: 'https://api.openai.com/v1/audio/transcriptions', model: 'whisper-1' },
+  'openai-4o': { endpoint: 'https://api.openai.com/v1/audio/transcriptions', model: 'gpt-4o-mini-transcribe' },
+  groq: { endpoint: 'https://api.groq.com/openai/v1/audio/transcriptions', model: 'whisper-large-v3-turbo' },
+  local: { endpoint: 'http://127.0.0.1:8000/v1/audio/transcriptions', model: 'whisper-1' },
+};
+
 // ---------------------------------------------------------------------------
 // Estado
 // ---------------------------------------------------------------------------
@@ -53,6 +60,8 @@ const tabs = [];
 window.__adminTermTabs = tabs; // usado por `npm run selftest`
 let activeTab = null;
 let toastTimer = null;
+let sessionSaveTimer = null;
+let lastPaneError = '';
 
 const $ = (id) => document.getElementById(id);
 const els = {
@@ -63,6 +72,11 @@ const els = {
   btnMic: $('btn-mic'), modal: $('settings-modal'), toast: $('toast'),
   searchBar: $('search-bar'), searchInput: $('search-input'),
 };
+
+/** El panel que recibe teclado, archivos y dictado. */
+const activePane = () => (activeTab ? activeTab.activePane : null);
+const allPanes = () => tabs.flatMap((t) => t.panes);
+const paneById = (id) => allPanes().find((p) => p.id === id);
 
 // ---------------------------------------------------------------------------
 // Utilidades
@@ -88,6 +102,13 @@ function toast(message, kind = '', action = null) {
 function hideToast() {
   els.toast.hidden = true;
   els.toast.textContent = '';
+}
+
+function flashStatus(text, ms = 1400) {
+  els.statusMsg.textContent = text;
+  setTimeout(() => {
+    if (els.statusMsg.textContent === text) els.statusMsg.textContent = '';
+  }, ms);
 }
 
 /** document.fonts.check miente con familias inexistentes: medimos el ancho. */
@@ -171,7 +192,7 @@ function renderTabs() {
 
     const title = document.createElement('span');
     title.className = 'tab-title';
-    title.textContent = tab.title;
+    title.textContent = tab.panes.length > 1 ? `${tab.title} (${tab.panes.length})` : tab.title;
     el.appendChild(title);
 
     const close = document.createElement('button');
@@ -207,27 +228,132 @@ function updateStatus() {
     els.statusPriv.appendChild(btn);
   }
 
-  const shellLabel = (info.shells.find((s) => s.key === (activeTab ? activeTab.shellKey : settings.shell)) || {}).label || '';
-  els.statusShell.textContent = shellLabel + (activeTab ? `  ·  ${activeTab.term.cols}x${activeTab.term.rows}` : '');
+  const pane = activePane();
+  const shellKey = pane ? pane.shellKey : settings.shell;
+  const shellLabel = (info.shells.find((s) => s.key === shellKey) || {}).label || '';
+  const size = pane ? `  ·  ${pane.term.cols}x${pane.term.rows}` : '';
+  const panes = activeTab && activeTab.panes.length > 1
+    ? `  ·  panel ${activeTab.panes.indexOf(pane) + 1}/${activeTab.panes.length}`
+    : '';
+  els.statusShell.textContent = shellLabel + size + panes;
   els.fontLabel.textContent = String(settings.fontSize);
   els.statusVersions.textContent = `AdminTerm ${info.version}  ·  Electron ${info.electron}`;
 }
 
-function fitTab(tab) {
-  if (!tab || tab.dead || tab.pane.offsetParent === null) return;
+function fitPane(pane) {
+  if (!pane || pane.el.offsetParent === null) return;
   try {
-    tab.fit.fit();
-    api.ptyResize(tab.id, tab.term.cols, tab.term.rows);
+    pane.fit.fit();
+    api.ptyResize(pane.id, pane.term.cols, pane.term.rows);
   } catch {
-    /* pane sin tamano todavia */
+    /* el panel aun no tiene tamano */
   }
+}
+
+function fitTab(tab) {
+  if (!tab) return;
+  for (const pane of tab.panes) fitPane(pane);
   updateStatus();
 }
 
-async function newTab(shellKey) {
-  const pane = document.createElement('div');
-  pane.className = 'term-pane';
-  els.terminals.appendChild(pane);
+// --- disposicion de paneles -------------------------------------------------
+
+/** Reconstruye la fila/columna de paneles intercalando los divisores. */
+function layoutTab(tab) {
+  tab.view.textContent = '';
+  tab.view.className = `tab-view dir-${tab.direction}` +
+    (tab === activeTab ? ' active' : '') +
+    (tab.panes.length > 1 ? ' split' : '');
+
+  tab.panes.forEach((pane, i) => {
+    if (i > 0) tab.view.appendChild(createDivider(tab, i - 1));
+    pane.el.style.flexGrow = String(pane.flex);
+    tab.view.appendChild(pane.el);
+  });
+  updatePaneFocusRing(tab);
+}
+
+function createDivider(tab, index) {
+  const divider = document.createElement('div');
+  divider.className = 'pane-divider';
+  divider.addEventListener('mousedown', (e) => startDividerDrag(tab, index, divider, e));
+  return divider;
+}
+
+function startDividerDrag(tab, index, divider, event) {
+  event.preventDefault();
+  const horizontal = tab.direction === 'row';
+  const a = tab.panes[index];
+  const b = tab.panes[index + 1];
+  if (!a || !b) return;
+
+  const rect = tab.view.getBoundingClientRect();
+  const size = horizontal ? rect.width : rect.height;
+  const total = tab.panes.reduce((sum, p) => sum + p.flex, 0);
+  const start = horizontal ? event.clientX : event.clientY;
+  const aStart = a.flex;
+  const bStart = b.flex;
+  const min = total * 0.12;
+
+  divider.classList.add('dragging');
+  document.body.classList.add('resizing-panes');
+
+  const onMove = (e) => {
+    const deltaPx = (horizontal ? e.clientX : e.clientY) - start;
+    const delta = (deltaPx / size) * total;
+    let na = aStart + delta;
+    let nb = bStart - delta;
+    if (na < min) { nb -= min - na; na = min; }
+    if (nb < min) { na -= min - nb; nb = min; }
+    a.flex = na;
+    b.flex = nb;
+    a.el.style.flexGrow = String(na);
+    b.el.style.flexGrow = String(nb);
+  };
+
+  const onUp = () => {
+    window.removeEventListener('mousemove', onMove);
+    window.removeEventListener('mouseup', onUp);
+    divider.classList.remove('dragging');
+    document.body.classList.remove('resizing-panes');
+    scheduleSessionSave();
+  };
+
+  window.addEventListener('mousemove', onMove);
+  window.addEventListener('mouseup', onUp);
+}
+
+function updatePaneFocusRing(tab) {
+  for (const pane of tab.panes) {
+    pane.el.classList.toggle('focused', pane === tab.activePane);
+  }
+}
+
+// --- creacion y destruccion -------------------------------------------------
+
+function createTab() {
+  const view = document.createElement('div');
+  view.className = 'tab-view dir-row';
+  els.terminals.appendChild(view);
+
+  return {
+    view,
+    panes: [],
+    direction: 'row',
+    activePane: null,
+    // Atajos para hablar de la pestana como si fuese su panel activo.
+    get term() { return this.activePane ? this.activePane.term : null; },
+    get id() { return this.activePane ? this.activePane.id : null; },
+    get title() { return this.activePane ? this.activePane.title : ''; },
+    get dead() { return this.panes.length > 0 && this.panes.every((p) => p.dead); },
+  };
+}
+
+async function createPane(tab, shellKey) {
+  const el = document.createElement('div');
+  el.className = 'term-pane';
+  // Debe estar en el DOM y visible antes de medir, o fit() da 80x24.
+  tab.view.appendChild(el);
 
   const term = new Terminal(termOptions());
   const fit = new FitAddon.FitAddon();
@@ -244,7 +370,7 @@ async function newTab(shellKey) {
     console.warn('unicode11 no disponible:', err);
   }
 
-  term.open(pane);
+  term.open(el);
 
   try {
     const webgl = new WebglAddon.WebglAddon();
@@ -263,85 +389,202 @@ async function newTab(shellKey) {
   });
 
   if (!res || !res.ok) {
-    pane.remove();
+    el.remove();
     term.dispose();
-    toast(`No se pudo abrir la terminal: ${res ? res.error : 'error desconocido'}`, 'error');
+    lastPaneError = res && res.error ? res.error : 'respuesta vacia de pty:create';
+    toast(`No se pudo abrir la terminal: ${lastPaneError}`, 'error');
     return null;
   }
 
-  const tab = {
-    id: res.id, term, fit, search, pane,
-    title: res.label, shellKey: res.shellKey, dead: false,
+  const pane = {
+    id: res.id, term, fit, search, el, tab,
+    shellKey: res.shellKey, title: res.label, dead: false, flex: 1,
   };
-  tabs.push(tab);
+  tab.panes.push(pane);
 
-  term.onData((data) => api.ptyInput(tab.id, data));
+  term.onData((data) => api.ptyInput(pane.id, data));
   term.onTitleChange((t) => {
     const next = prettyTitle(t, res.label);
-    if (next !== tab.title) {
-      tab.title = next;
+    if (next !== pane.title) {
+      pane.title = next;
       renderTabs();
     }
   });
   term.attachCustomKeyEventHandler((e) => !(e.type === 'keydown' && isAppShortcut(e)));
 
-  pane.addEventListener('contextmenu', async (e) => {
+  el.addEventListener('focusin', () => focusPane(pane));
+  el.addEventListener('mousedown', () => focusPane(pane));
+
+  el.addEventListener('contextmenu', (e) => {
     e.preventDefault();
+    focusPane(pane);
     const selection = term.getSelection();
     if (selection) {
       api.writeClipboard(selection);
       term.clearSelection();
-      els.statusMsg.textContent = 'Copiado';
-      setTimeout(() => (els.statusMsg.textContent = ''), 1200);
+      flashStatus('Copiado');
     } else {
-      pasteIntoTerm(tab);
+      pasteIntoPane(pane);
     }
   });
 
-  const ro = new ResizeObserver(() => {
-    clearTimeout(tab.resizeTimer);
-    tab.resizeTimer = setTimeout(() => fitTab(tab), 40);
+  pane.observer = new ResizeObserver(() => {
+    clearTimeout(pane.resizeTimer);
+    pane.resizeTimer = setTimeout(() => {
+      fitPane(pane);
+      if (pane === activePane()) updateStatus();
+    }, 40);
   });
-  ro.observe(pane);
-  tab.observer = ro;
+  pane.observer.observe(el);
 
+  return pane;
+}
+
+async function newTab(shellKey) {
+  const tab = createTab();
+  tabs.push(tab);
+  const pane = await createPane(tab, shellKey);
+  if (!pane) {
+    tab.view.remove();
+    tabs.splice(tabs.indexOf(tab), 1);
+    renderTabs();
+    return null;
+  }
+  tab.activePane = pane;
   activateTab(tab);
+  scheduleSessionSave();
   return tab;
+}
+
+/** Divide el panel activo. `direction`: 'row' = derecha, 'column' = abajo. */
+async function splitActive(direction) {
+  if (!activeTab) return null;
+
+  if (activeTab.panes.length > 1 && activeTab.direction !== direction) {
+    toast(
+      `Esta pestana ya esta dividida en ${activeTab.direction === 'row' ? 'columnas' : 'filas'}. ` +
+        'Los paneles anidados no estan soportados: usa una pestana nueva.',
+      'error'
+    );
+    return null;
+  }
+  if (activeTab.panes.length >= 4) {
+    toast('Maximo 4 paneles por pestana.', 'error');
+    return null;
+  }
+
+  activeTab.direction = direction;
+  const pane = await createPane(activeTab, settings.shell);
+  if (!pane) return null;
+
+  activeTab.activePane = pane;
+  layoutTab(activeTab);
+  requestAnimationFrame(() => {
+    fitTab(activeTab);
+    pane.term.focus();
+  });
+  renderTabs();
+  scheduleSessionSave();
+  return pane;
+}
+
+function focusPane(pane) {
+  if (!pane || pane.tab.activePane === pane) return;
+  pane.tab.activePane = pane;
+  updatePaneFocusRing(pane.tab);
+  updateStatus();
+}
+
+/** Mueve el foco al panel contiguo en la direccion dada. */
+function movePaneFocus(key) {
+  if (!activeTab || activeTab.panes.length < 2) return;
+  const forward =
+    (activeTab.direction === 'row' && key === 'arrowright') ||
+    (activeTab.direction === 'column' && key === 'arrowdown');
+  const backward =
+    (activeTab.direction === 'row' && key === 'arrowleft') ||
+    (activeTab.direction === 'column' && key === 'arrowup');
+  if (!forward && !backward) return;
+
+  const i = activeTab.panes.indexOf(activeTab.activePane);
+  const next = activeTab.panes[i + (forward ? 1 : -1)];
+  if (!next) return;
+  focusPane(next);
+  next.term.focus();
 }
 
 function activateTab(tab) {
   activeTab = tab;
-  for (const t of tabs) t.pane.classList.toggle('active', t === tab);
+  for (const t of tabs) {
+    t.view.classList.toggle('active', t === tab);
+  }
+  layoutTab(tab);
   renderTabs();
   requestAnimationFrame(() => {
     fitTab(tab);
-    tab.term.focus();
+    if (tab.activePane) tab.activePane.term.focus();
   });
 }
 
+/** Cierra el panel activo; si es el ultimo, cierra la pestana. */
+function closeActivePane() {
+  const pane = activePane();
+  if (!pane) return;
+  if (activeTab.panes.length === 1) return closeTab(activeTab);
+  if (!confirmClose(pane, () => destroyPane(pane))) return;
+  destroyPane(pane);
+}
+
+function confirmClose(target, run) {
+  if (!settings.confirmClose || target.dead) return true;
+  if (target.pendingClose) return true;
+  target.pendingClose = true;
+  setTimeout(() => (target.pendingClose = false), 3000);
+  toast(`Repite la accion para cerrar "${target.title}" (la sesion sigue viva).`, '', {
+    label: 'Cerrar ahora',
+    run,
+  });
+  return false;
+}
+
+function destroyPane(pane) {
+  const tab = pane.tab;
+  api.ptyKill(pane.id);
+  if (pane.observer) pane.observer.disconnect();
+  pane.term.dispose();
+  pane.el.remove();
+
+  const i = tab.panes.indexOf(pane);
+  tab.panes.splice(i, 1);
+  if (tab.activePane === pane) tab.activePane = tab.panes[Math.min(i, tab.panes.length - 1)] || null;
+  for (const p of tab.panes) p.flex = 1;
+
+  layoutTab(tab);
+  renderTabs();
+  requestAnimationFrame(() => {
+    fitTab(tab);
+    if (tab.activePane) tab.activePane.term.focus();
+  });
+  scheduleSessionSave();
+}
+
 function closeTab(tab) {
-  if (settings.confirmClose && !tab.dead) {
-    // Confirmacion barata: doble pulsacion en 3 segundos.
-    if (!tab.pendingClose) {
-      tab.pendingClose = true;
-      setTimeout(() => (tab.pendingClose = false), 3000);
-      toast(`Vuelve a pulsar la X para cerrar "${tab.title}" (hay una sesion activa).`, '', {
-        label: 'Cerrar ahora',
-        run: () => destroyTab(tab),
-      });
-      return;
-    }
-  }
+  if (!confirmClose(tab, () => destroyTab(tab))) return;
   destroyTab(tab);
 }
 
 function destroyTab(tab) {
-  api.ptyKill(tab.id);
-  if (tab.observer) tab.observer.disconnect();
-  tab.term.dispose();
-  tab.pane.remove();
+  for (const pane of [...tab.panes]) {
+    api.ptyKill(pane.id);
+    if (pane.observer) pane.observer.disconnect();
+    pane.term.dispose();
+  }
+  tab.panes.length = 0;
+  tab.view.remove();
+
   const i = tabs.indexOf(tab);
   if (i >= 0) tabs.splice(i, 1);
+
   if (activeTab === tab) {
     activeTab = null;
     if (tabs.length) activateTab(tabs[Math.min(i, tabs.length - 1)]);
@@ -349,46 +592,93 @@ function destroyTab(tab) {
   } else {
     renderTabs();
   }
-}
-
-function tabById(id) {
-  return tabs.find((t) => t.id === id);
+  scheduleSessionSave();
 }
 
 api.onPtyData(({ id, data }) => {
-  const tab = tabById(id);
-  if (tab) tab.term.write(data);
+  const pane = paneById(id);
+  if (pane) pane.term.write(data);
 });
 
 api.onPtyExit(({ id, exitCode }) => {
-  const tab = tabById(id);
-  if (!tab) return;
-  tab.dead = true;
-  tab.term.write(`\r\n\x1b[38;5;244m[proceso finalizado - codigo ${exitCode}. Ctrl+Shift+W para cerrar la pestana]\x1b[0m\r\n`);
+  const pane = paneById(id);
+  if (!pane) return;
+  pane.dead = true;
+  pane.term.write(
+    `\r\n\x1b[38;5;244m[proceso finalizado - codigo ${exitCode}. Ctrl+Shift+W para cerrar el panel]\x1b[0m\r\n`
+  );
   renderTabs();
 });
+
+// ---------------------------------------------------------------------------
+// Sesion (que pestanas y paneles reabrir)
+// ---------------------------------------------------------------------------
+
+function layoutSnapshot() {
+  return {
+    activeIndex: Math.max(0, tabs.indexOf(activeTab)),
+    tabs: tabs.map((tab) => ({
+      direction: tab.direction,
+      panes: tab.panes.map((p) => ({ shellKey: p.shellKey, flex: Number(p.flex.toFixed(3)) })),
+    })),
+  };
+}
+
+function scheduleSessionSave() {
+  if (info && info.selftest) return;
+  clearTimeout(sessionSaveTimer);
+  sessionSaveTimer = setTimeout(async () => {
+    // No pasa por patchSettings: guardar la disposicion no debe repintar nada.
+    settings = await api.setSettings({ session: layoutSnapshot() });
+  }, 600);
+}
+
+async function restoreSession(saved) {
+  let restored = 0;
+  for (const spec of saved.tabs) {
+    const tab = createTab();
+    tab.direction = spec.direction === 'column' ? 'column' : 'row';
+    tabs.push(tab);
+
+    for (const paneSpec of spec.panes) {
+      const known = info.shells.some((s) => s.key === paneSpec.shellKey);
+      const pane = await createPane(tab, known ? paneSpec.shellKey : settings.shell);
+      if (pane) pane.flex = Number(paneSpec.flex) > 0 ? Number(paneSpec.flex) : 1;
+    }
+
+    if (!tab.panes.length) {
+      tab.view.remove();
+      tabs.splice(tabs.indexOf(tab), 1);
+      continue;
+    }
+    tab.activePane = tab.panes[0];
+    restored++;
+  }
+  if (!restored) return false;
+  activateTab(tabs[Math.min(saved.activeIndex || 0, tabs.length - 1)]);
+  return true;
+}
 
 // ---------------------------------------------------------------------------
 // Portapapeles y archivos
 // ---------------------------------------------------------------------------
 
-async function pasteIntoTerm(tab) {
+async function pasteIntoPane(pane) {
   const text = await api.readClipboard();
   if (!text) return;
-  api.ptyInput(tab.id, text.replace(/\r\n/g, '\r').replace(/\n/g, '\r'));
+  api.ptyInput(pane.id, text.replace(/\r\n/g, '\r').replace(/\n/g, '\r'));
 }
 
 function insertPaths(paths) {
-  if (!activeTab || !paths.length) return;
-  const text = paths.map(quotePath).join(' ') + ' ';
-  api.ptyInput(activeTab.id, text);
-  activeTab.term.focus();
+  const pane = activePane();
+  if (!pane || !paths.length) return;
+  api.ptyInput(pane.id, paths.map(quotePath).join(' ') + ' ');
+  pane.term.focus();
   toast(`${paths.length} ruta(s) insertada(s).`, 'ok');
 }
 
 async function pickFiles() {
-  const paths = await api.pickFiles();
-  insertPaths(paths);
+  insertPaths(await api.pickFiles());
 }
 
 let dragDepth = 0;
@@ -437,14 +727,17 @@ function pickMimeType() {
   return '';
 }
 
+function sttNeedsKey() {
+  return !/^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])/i.test(settings.stt.endpoint || '');
+}
+
 async function startMic() {
   if (mic.recorder) return;
-  if (!settings.stt.apiKey) {
-    toast(
-      'Configura una API key de transcripcion en Ajustes para dictar dentro de AdminTerm.',
-      'error',
-      { label: 'Abrir ajustes', run: openSettings }
-    );
+  if (!settings.stt.apiKey && sttNeedsKey()) {
+    toast('Configura una API key de transcripcion en Ajustes para dictar.', 'error', {
+      label: 'Abrir ajustes',
+      run: openSettings,
+    });
     return;
   }
   try {
@@ -516,20 +809,18 @@ async function onMicStop() {
   els.statusMsg.textContent = '';
 
   if (!res.ok) {
-    if (res.code === 'NO_KEY') {
-      toast(res.error, 'error', { label: 'Abrir ajustes', run: openSettings });
-    } else {
-      toast(`Transcripcion fallida. ${res.error}`, 'error');
-    }
+    if (res.code === 'NO_KEY') toast(res.error, 'error', { label: 'Abrir ajustes', run: openSettings });
+    else toast(`Transcripcion fallida. ${res.error}`, 'error');
     return;
   }
   if (!res.text) {
     toast('No se detecto voz en la grabacion.', 'error');
     return;
   }
-  if (!activeTab) return;
-  api.ptyInput(activeTab.id, res.text + (settings.stt.autoSend ? '\r' : ''));
-  activeTab.term.focus();
+  const pane = activePane();
+  if (!pane) return;
+  api.ptyInput(pane.id, res.text + (settings.stt.autoSend ? '\r' : ''));
+  pane.term.focus();
 }
 
 async function refreshMicDevices() {
@@ -555,6 +846,51 @@ async function refreshMicDevices() {
   select.value = settings.stt.deviceId || '';
 }
 
+/** WAV mono 16 kHz con un tono muy bajo: audio valido para probar el endpoint. */
+function probeAudioWav(seconds = 1, rate = 16000) {
+  const samples = seconds * rate;
+  const buffer = new ArrayBuffer(44 + samples * 2);
+  const view = new DataView(buffer);
+  const ascii = (offset, text) => {
+    for (let i = 0; i < text.length; i++) view.setUint8(offset + i, text.charCodeAt(i));
+  };
+
+  ascii(0, 'RIFF');
+  view.setUint32(4, 36 + samples * 2, true);
+  ascii(8, 'WAVE');
+  ascii(12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, rate, true);
+  view.setUint32(28, rate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  ascii(36, 'data');
+  view.setUint32(40, samples * 2, true);
+
+  for (let i = 0; i < samples; i++) {
+    view.setInt16(44 + i * 2, Math.round(Math.sin((i / rate) * 440 * 2 * Math.PI) * 600), true);
+  }
+  return new Uint8Array(buffer);
+}
+
+async function testTranscription() {
+  const btn = $('btn-stt-test');
+  const previous = btn.textContent;
+  btn.textContent = 'Probando…';
+  btn.disabled = true;
+  try {
+    const res = await api.transcribe(probeAudioWav(), 'audio/wav', 'prueba.wav');
+    if (res.ok) toast('Conexion correcta: el endpoint respondio y acepto las credenciales.', 'ok');
+    else if (res.code === 'NO_KEY') toast(res.error, 'error');
+    else toast(`Fallo la prueba. ${res.error}`, 'error');
+  } finally {
+    btn.textContent = previous;
+    btn.disabled = false;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Busqueda
 // ---------------------------------------------------------------------------
@@ -567,17 +903,19 @@ function openSearch() {
 
 function closeSearch() {
   els.searchBar.hidden = true;
-  if (activeTab) {
-    activeTab.search.clearDecorations();
-    activeTab.term.focus();
+  const pane = activePane();
+  if (pane) {
+    pane.search.clearDecorations();
+    pane.term.focus();
   }
 }
 
 function runSearch(back = false) {
-  if (!activeTab || !els.searchInput.value) return;
-  const opts = { decorations: { matchOverviewRuler: '#ffb454', activeMatchColorOverviewRuler: '#5ccfe6' } };
-  if (back) activeTab.search.findPrevious(els.searchInput.value, opts);
-  else activeTab.search.findNext(els.searchInput.value, opts);
+  const pane = activePane();
+  if (!pane || !els.searchInput.value) return;
+  const opts = { decorations: { matchOverviewRuler: '#39ff14', activeMatchColorOverviewRuler: '#5ce68f' } };
+  if (back) pane.search.findPrevious(els.searchInput.value, opts);
+  else pane.search.findNext(els.searchInput.value, opts);
 }
 
 // ---------------------------------------------------------------------------
@@ -585,17 +923,23 @@ function runSearch(back = false) {
 // ---------------------------------------------------------------------------
 
 function isAppShortcut(e) {
-  if (!e.ctrlKey || e.altKey) return false;
   const k = e.key.toLowerCase();
-  if (e.shiftKey && ['t', 'w', 'c', 'v', 'f', 'm', 'o'].includes(k)) return true;
+
+  // Division de paneles y movimiento del foco: familia Alt.
+  if (e.altKey && !e.ctrlKey) {
+    if (e.shiftKey && ['+', '-', '=', '_'].includes(k)) return true;
+    if (!e.shiftKey && ['arrowleft', 'arrowright', 'arrowup', 'arrowdown'].includes(k)) return true;
+    return false;
+  }
+
+  if (!e.ctrlKey || e.altKey) return false;
+  if (e.shiftKey && ['t', 'w', 'c', 'v', 'f', 'm', 'o', 'tab'].includes(k)) return true;
   if (!e.shiftKey && (k === 'tab' || k === ',' || k === '+' || k === '-' || k === '=' || k === '0')) return true;
-  if (e.shiftKey && k === 'tab') return true;
   if (!e.shiftKey && /^[1-9]$/.test(k)) return true;
   return false;
 }
 
 document.addEventListener('keydown', (e) => {
-  // Esc cierra lo que este abierto encima.
   if (e.key === 'Escape') {
     if (mic.recorder) return stopMic(false);
     if (!els.searchBar.hidden) return closeSearch();
@@ -614,18 +958,33 @@ document.addEventListener('keydown', (e) => {
   const k = e.key.toLowerCase();
   e.preventDefault();
 
+  if (e.altKey) {
+    if (e.shiftKey) {
+      if (k === '+' || k === '=') splitActive('row');
+      if (k === '-' || k === '_') splitActive('column');
+    } else {
+      movePaneFocus(k);
+    }
+    return;
+  }
+
   if (e.shiftKey) {
     switch (k) {
       case 't': newTab(); return;
-      case 'w': if (activeTab) closeTab(activeTab); return;
-      case 'c':
-        if (activeTab && activeTab.term.hasSelection()) {
-          api.writeClipboard(activeTab.term.getSelection());
-          els.statusMsg.textContent = 'Copiado';
-          setTimeout(() => (els.statusMsg.textContent = ''), 1200);
+      case 'w': closeActivePane(); return;
+      case 'c': {
+        const pane = activePane();
+        if (pane && pane.term.hasSelection()) {
+          api.writeClipboard(pane.term.getSelection());
+          flashStatus('Copiado');
         }
         return;
-      case 'v': if (activeTab) pasteIntoTerm(activeTab); return;
+      }
+      case 'v': {
+        const pane = activePane();
+        if (pane) pasteIntoPane(pane);
+        return;
+      }
       case 'f': openSearch(); return;
       case 'm': mic.recorder ? stopMic(false) : startMic(); return;
       case 'o': pickFiles(); return;
@@ -640,8 +999,8 @@ document.addEventListener('keydown', (e) => {
   if (k === '-') return setFontSize(settings.fontSize - 1);
   if (k === '0') return setFontSize(15);
   if (/^[1-9]$/.test(k)) {
-    const idx = Number(k) - 1;
-    if (tabs[idx]) activateTab(tabs[idx]);
+    const tab = tabs[Number(k) - 1];
+    if (tab) activateTab(tab);
   }
 });
 
@@ -679,15 +1038,15 @@ function setFontSize(size) {
 function applySettings() {
   document.documentElement.setAttribute('data-ui', settings.theme === 'claro' ? 'claro' : 'oscuro');
   const opts = termOptions();
-  for (const tab of tabs) {
+  for (const pane of allPanes()) {
     for (const [key, value] of Object.entries(opts)) {
       try {
-        tab.term.options[key] = value;
+        pane.term.options[key] = value;
       } catch (err) {
         console.warn(`opcion "${key}" no aplicada:`, err.message);
       }
     }
-    fitTab(tab);
+    fitPane(pane);
   }
   updateStatus();
 }
@@ -700,7 +1059,15 @@ function openSettings() {
 
 function closeSettings() {
   els.modal.hidden = true;
-  if (activeTab) activeTab.term.focus();
+  const pane = activePane();
+  if (pane) pane.term.focus();
+}
+
+function currentSttPreset() {
+  for (const [name, preset] of Object.entries(STT_PRESETS)) {
+    if (preset.endpoint === settings.stt.endpoint && preset.model === settings.stt.model) return name;
+  }
+  return 'custom';
 }
 
 function fillSettingsForm() {
@@ -742,6 +1109,11 @@ function fillSettingsForm() {
   $('set-scrollback').value = settings.scrollback;
   $('set-autoElevate').checked = !!settings.autoElevate;
   $('set-confirmClose').checked = !!settings.confirmClose;
+  $('set-restoreSession').checked = !!settings.restoreSession;
+  $('set-rememberWindow').checked = !!settings.rememberWindow;
+  $('set-globalHotkeyEnabled').checked = !!settings.globalHotkeyEnabled;
+  $('set-globalHotkey').value = settings.globalHotkey;
+  $('set-stt-preset').value = currentSttPreset();
   $('set-stt-endpoint').value = settings.stt.endpoint;
   $('set-stt-model').value = settings.stt.model;
   $('set-stt-apiKey').value = settings.stt.apiKey;
@@ -762,6 +1134,7 @@ function bindSettingsForm() {
     'set-startCwd': ['startCwd', String],
     'set-scrollback': ['scrollback', Number],
     'set-shell': ['shell', String],
+    'set-globalHotkey': ['globalHotkey', String],
   };
   for (const [id, [key, cast]] of Object.entries(simple)) {
     $(id).addEventListener('change', (e) => patchSettings({ [key]: cast(e.target.value) }));
@@ -772,6 +1145,8 @@ function bindSettingsForm() {
     'set-highContrast': 'highContrast',
     'set-autoElevate': 'autoElevate',
     'set-confirmClose': 'confirmClose',
+    'set-restoreSession': 'restoreSession',
+    'set-rememberWindow': 'rememberWindow',
   };
   for (const [id, key] of Object.entries(checks)) {
     $(id).addEventListener('change', (e) => patchSettings({ [key]: e.target.checked }));
@@ -790,6 +1165,29 @@ function bindSettingsForm() {
   $('set-stt-autoSend').addEventListener('change', (e) =>
     patchSettings({ stt: { autoSend: e.target.checked } })
   );
+
+  $('set-stt-preset').addEventListener('change', async (e) => {
+    const preset = STT_PRESETS[e.target.value];
+    if (!preset) return;
+    await patchSettings({ stt: { endpoint: preset.endpoint, model: preset.model } });
+    $('set-stt-endpoint').value = preset.endpoint;
+    $('set-stt-model').value = preset.model;
+  });
+
+  $('btn-stt-test').addEventListener('click', (e) => {
+    e.preventDefault();
+    testTranscription();
+  });
+
+  $('set-globalHotkeyEnabled').addEventListener('change', async (e) => {
+    await patchSettings({ globalHotkeyEnabled: e.target.checked });
+    applyHotkey();
+  });
+  $('btn-hotkey-apply').addEventListener('click', async (e) => {
+    e.preventDefault();
+    await patchSettings({ globalHotkey: $('set-globalHotkey').value.trim() });
+    applyHotkey();
+  });
 
   $('btn-pick-cwd').addEventListener('click', async (e) => {
     e.preventDefault();
@@ -823,12 +1221,23 @@ function bindSettingsForm() {
   });
 }
 
+async function applyHotkey() {
+  const res = await api.applyHotkey();
+  if (res.error) toast(`Atajo global: ${res.error}`, 'error');
+  else if (res.registered) toast(`Atajo global activo: ${settings.globalHotkey}`, 'ok');
+  else if (settings.globalHotkeyEnabled) {
+    toast(`Windows rechazo "${settings.globalHotkey}": ya lo usa otra aplicacion.`, 'error');
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Arranque
 // ---------------------------------------------------------------------------
 
 function bindToolbar() {
   $('btn-new-tab').addEventListener('click', () => newTab());
+  $('btn-split-right').addEventListener('click', () => splitActive('row'));
+  $('btn-split-down').addEventListener('click', () => splitActive('column'));
   $('btn-files').addEventListener('click', pickFiles);
   $('btn-settings').addEventListener('click', openSettings);
   $('btn-font-plus').addEventListener('click', () => setFontSize(settings.fontSize + 1));
@@ -861,7 +1270,9 @@ async function boot() {
     opt.textContent = s.label;
     els.shellSelect.appendChild(opt);
   }
-  els.shellSelect.value = info.shells.some((s) => s.key === settings.shell) ? settings.shell : info.shells[0].key;
+  els.shellSelect.value = info.shells.some((s) => s.key === settings.shell)
+    ? settings.shell
+    : info.shells[0].key;
 
   // El <title> del HTML pisa al de BrowserWindow, asi que el estado de
   // privilegios se marca aqui: se ve en la barra de tareas y en Alt+Tab.
@@ -872,14 +1283,20 @@ async function boot() {
   bindSettingsForm();
   updateStatus();
 
-  await newTab(els.shellSelect.value);
+  const saved = settings.session;
+  const canRestore =
+    settings.restoreSession && !info.selftest && saved && Array.isArray(saved.tabs) && saved.tabs.length;
+  if (!canRestore || !(await restoreSession(saved))) {
+    await newTab(els.shellSelect.value);
+  }
+
+  if (settings.globalHotkeyEnabled) api.applyHotkey();
 
   if (info.uacDenied) {
-    toast(
-      'Se cancelo el aviso de UAC: la terminal se abrio SIN privilegios de administrador.',
-      'error',
-      { label: 'Reintentar como admin', run: () => api.relaunchElevated() }
-    );
+    toast('Se cancelo el aviso de UAC: la terminal se abrio SIN privilegios de administrador.', 'error', {
+      label: 'Reintentar como admin',
+      run: () => api.relaunchElevated(),
+    });
   }
   window.__adminTermReady = true;
 }
@@ -888,14 +1305,24 @@ async function boot() {
 window.__adminTerm = {
   tabs,
   newTab,
+  splitActive,
   destroyTab,
+  destroyPane,
+  closeActivePane,
+  movePaneFocus,
   patchSettings,
   insertPaths,
   openSettings,
   closeSettings,
   setFontSize,
+  layoutSnapshot,
+  restoreSession,
+  probeAudioWav,
+  get lastPaneError() { return lastPaneError; },
   get settings() { return settings; },
   get activeTab() { return activeTab; },
+  get activePane() { return activePane(); },
+  get panes() { return allPanes(); },
   get fonts() { return availableFonts; },
 };
 

@@ -5,14 +5,17 @@
   --border: #232a37;
   --fg: #e6edf3;
   --fg-dim: #9aa7b8;
-  --accent: #ffb454;
-  --accent-2: #5ccfe6;
+  --accent: #39ff14;          /* verde neon: el color de los detalles */
+  --accent-2: #5ce68f;        /* verde menta para titulos y foco */
+  --on-accent: #04170a;       /* texto sobre fondo neon */
+  --warn: #ffb454;            /* solo para "sin privilegios de admin" */
   --danger: #ff6b6b;
-  --ok: #7ee787;
+  --ok: #39ff14;
   --ui-font: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
   --radius: 7px;
 }
 
+/* Sobre blanco, el verde neon es ilegible: se oscurece manteniendo el tono. */
 html[data-ui="claro"] {
   --bg: #ffffff;
   --bg-chrome: #f2f4f8;
@@ -20,8 +23,11 @@ html[data-ui="claro"] {
   --border: #d4dae4;
   --fg: #1c1f24;
   --fg-dim: #5a6472;
-  --accent: #b26100;
-  --accent-2: #0b6a8c;
+  --accent: #0f8a2e;
+  --accent-2: #0b6a4a;
+  --on-accent: #ffffff;
+  --warn: #8a5200;
+  --ok: #0f8a2e;
 }
 
 * { box-sizing: border-box; }
@@ -170,14 +176,44 @@ select:focus, input:focus { outline: 2px solid var(--accent-2); outline-offset: 
   background: var(--bg);
 }
 
-.term-pane {
+/* Una vista por pestana; dentro, uno o varios paneles en fila o columna. */
+.tab-view {
   position: absolute;
   inset: 0;
-  padding: 6px 4px 4px 8px;
   display: none;
 }
-.term-pane.active { display: block; }
+.tab-view.active { display: flex; }
+/* Prefijo "dir-" a proposito: una clase suelta `row` chocaria con la `.row`
+   del formulario de ajustes, que impone align-items:center. */
+.tab-view.dir-row { flex-direction: row; }
+.tab-view.dir-column { flex-direction: column; }
+
+.term-pane {
+  position: relative;
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+  padding: 6px 4px 4px 8px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+}
+/* El borde solo aparece cuando hay mas de un panel: asi se sabe cual escucha. */
+.tab-view.split .term-pane.focused { border-color: var(--accent); }
 .term-pane .xterm { height: 100%; }
+
+.pane-divider {
+  flex: 0 0 6px;
+  background: var(--border);
+  position: relative;
+}
+.pane-divider:hover, .pane-divider.dragging { background: var(--accent); }
+.tab-view.dir-row > .pane-divider { cursor: col-resize; }
+.tab-view.dir-column > .pane-divider { cursor: row-resize; }
+
+/* Sin esto, el puntero "cae" dentro de un iframe/canvas al arrastrar rapido. */
+body.resizing-panes { cursor: inherit; }
+body.resizing-panes .xterm { pointer-events: none; }
+
 .xterm-viewport::-webkit-scrollbar { width: 11px; }
 .xterm-viewport::-webkit-scrollbar-thumb {
   background: #38414f;
@@ -207,8 +243,8 @@ select:focus, input:focus { outline: 2px solid var(--accent-2); outline-offset: 
   font-size: 11px;
   border: 1px solid transparent;
 }
-.badge.admin { background: rgba(126, 231, 135, 0.16); color: var(--ok); border-color: rgba(126, 231, 135, 0.4); }
-.badge.user { background: rgba(255, 180, 84, 0.15); color: var(--accent); border-color: rgba(255, 180, 84, 0.4); }
+.badge.admin { background: rgba(57, 255, 20, 0.14); color: var(--ok); border-color: rgba(57, 255, 20, 0.45); }
+.badge.user { background: rgba(255, 180, 84, 0.15); color: var(--warn); border-color: rgba(255, 180, 84, 0.4); }
 .badge.user button {
   margin-left: 6px;
   border: 0;
@@ -260,7 +296,7 @@ select:focus, input:focus { outline: 2px solid var(--accent-2); outline-offset: 
 
 button.primary {
   background: var(--accent);
-  color: #16110a;
+  color: var(--on-accent);
   border: 0;
   border-radius: var(--radius);
   padding: 7px 16px;
@@ -330,6 +366,14 @@ button.ghost.small { padding: 4px 9px; font-size: 12px; }
 .row.check input { accent-color: var(--accent); }
 .row.check span { color: var(--fg); }
 .hint { color: var(--fg-dim); font-size: 11.5px; line-height: 1.5; margin: 4px 0 10px; }
+.hint code {
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 4px;
+  font-family: ui-monospace, Consolas, monospace;
+  color: var(--fg);
+}
 .shortcuts { margin: 0; padding-left: 18px; color: var(--fg-dim); line-height: 1.8; }
 kbd {
   background: var(--bg-elev);
