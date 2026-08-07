@@ -129,6 +129,13 @@ manipule una ventana elevada. No son fallos de AdminTerm:
 node_modules\electron\dist\electron.exe . --no-elevate --selftest
 ```
 
+## Mejoras pendientes
+
+Ideas evaluadas y no implementadas están en
+[`docs/MEJORAS-PENDIENTES.md`](docs/MEJORAS-PENDIENTES.md), con las mediciones
+y decisiones ya tomadas: autocompletado al escribir, transcripción local sin
+nube y paneles anidados.
+
 ## Seguridad
 
 La app corre como administrador: todo lo que escribas en ella se ejecuta con
