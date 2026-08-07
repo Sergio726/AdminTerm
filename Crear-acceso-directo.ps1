@@ -4,11 +4,20 @@
 
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
-$exe = Join-Path $root 'node_modules\electron\dist\electron.exe'
 $icon = Join-Path $root 'build\icon.ico'
 
-if (-not (Test-Path $exe)) {
-    Write-Host 'No se encontro Electron. Ejecuta primero:  npm install' -ForegroundColor Yellow
+# Se prefiere la app compilada (arranca mas rapido y no depende de Node).
+$packaged = Join-Path $root 'dist\win-unpacked\AdminTerm.exe'
+$dev = Join-Path $root 'node_modules\electron\dist\electron.exe'
+
+if (Test-Path $packaged) {
+    $exe = $packaged
+    $arguments = ''
+} elseif (Test-Path $dev) {
+    $exe = $dev
+    $arguments = '"' + $root + '"'
+} else {
+    Write-Host 'No se encontro la app. Ejecuta primero:  npm install   (y opcionalmente npm run build)' -ForegroundColor Yellow
     exit 1
 }
 
@@ -24,7 +33,7 @@ foreach ($lnkPath in $targets) {
 
     $lnk = $shell.CreateShortcut($lnkPath)
     $lnk.TargetPath = $exe
-    $lnk.Arguments = '"' + $root + '"'
+    $lnk.Arguments = $arguments
     $lnk.WorkingDirectory = $root
     $lnk.Description = 'Terminal de administrador con dictado y carga de archivos'
     if (Test-Path $icon) { $lnk.IconLocation = $icon }
