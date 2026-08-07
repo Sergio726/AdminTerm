@@ -1,0 +1,55 @@
+{
+  "name": "adminterm",
+  "productName": "AdminTerm",
+  "version": "1.0.0",
+  "description": "Terminal de escritorio ultraligera con privilegios de administrador, dictado por microfono y carga de archivos. Pensada para usar Claude Code y Codex.",
+  "main": "src/main.js",
+  "author": "Sebastian",
+  "license": "MIT",
+  "scripts": {
+    "postinstall": "node scripts/copy-vendor.js && node scripts/make-icon.js",
+    "vendor": "node scripts/copy-vendor.js",
+    "icon": "node scripts/make-icon.js",
+    "start": "electron .",
+    "start:normal": "electron . --no-elevate",
+    "selftest": "electron . --no-elevate --selftest",
+    "build": "electron-builder --win portable --publish never",
+    "dist": "electron-builder --win nsis --publish never"
+  },
+  "dependencies": {
+    "@lydell/node-pty": "1.1.0"
+  },
+  "devDependencies": {
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/addon-search": "^0.16.0",
+    "@xterm/addon-unicode11": "^0.9.0",
+    "@xterm/addon-web-links": "^0.12.0",
+    "@xterm/addon-webgl": "^0.19.0",
+    "@xterm/xterm": "^6.0.0",
+    "electron": "^43.0.0",
+    "electron-builder": "^26.0.12"
+  },
+  "build": {
+    "appId": "com.sebastian.adminterm",
+    "productName": "AdminTerm",
+    "directories": { "output": "dist" },
+    "files": [
+      "src/**/*",
+      "!src/renderer/vendor/.gitkeep",
+      "package.json"
+    ],
+    "win": {
+      "target": ["portable", "nsis"],
+      "icon": "build/icon.ico",
+      "requestedExecutionLevel": "asInvoker"
+    },
+    "portable": { "artifactName": "AdminTerm-portable-${version}.exe" },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "shortcutName": "AdminTerm"
+    }
+  }
+}

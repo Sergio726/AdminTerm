@@ -1,0 +1,238 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; media-src 'self' blob:; connect-src 'self'" />
+  <title>AdminTerm</title>
+  <link rel="stylesheet" href="vendor/xterm.css" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+
+  <header id="toolbar">
+    <div id="tabs" role="tablist" aria-label="Pestanas de terminal"></div>
+    <button id="btn-new-tab" class="icon-btn" title="Nueva pestana (Ctrl+Shift+T)" aria-label="Nueva pestana">+</button>
+
+    <div class="spacer"></div>
+
+    <select id="shell-select" title="Shell para las nuevas pestanas" aria-label="Shell"></select>
+
+    <div class="group" role="group" aria-label="Tamano de fuente">
+      <button id="btn-font-minus" class="icon-btn" title="Reducir fuente (Ctrl+-)" aria-label="Reducir fuente">A&minus;</button>
+      <span id="font-size-label" aria-live="polite">15</span>
+      <button id="btn-font-plus" class="icon-btn" title="Aumentar fuente (Ctrl++)" aria-label="Aumentar fuente">A+</button>
+    </div>
+
+    <button id="btn-files" class="icon-btn labeled" title="Insertar rutas de archivos (Ctrl+Shift+O). Tambien puedes arrastrar y soltar.">
+      <span class="ico">&#128206;</span><span class="lbl">Archivos</span>
+    </button>
+
+    <button id="btn-mic" class="icon-btn labeled" title="Dictar por microfono (Ctrl+Shift+M)">
+      <span class="ico">&#127908;</span><span class="lbl">Micro</span>
+    </button>
+
+    <button id="btn-settings" class="icon-btn" title="Ajustes (Ctrl+,)" aria-label="Ajustes">&#9881;</button>
+  </header>
+
+  <main id="terminals"></main>
+
+  <div id="search-bar" hidden>
+    <input id="search-input" type="text" placeholder="Buscar en el terminal..." aria-label="Buscar" />
+    <button id="search-prev" class="icon-btn" title="Anterior (Shift+Enter)">&#8593;</button>
+    <button id="search-next" class="icon-btn" title="Siguiente (Enter)">&#8595;</button>
+    <button id="search-close" class="icon-btn" title="Cerrar (Esc)">&times;</button>
+  </div>
+
+  <footer id="statusbar">
+    <span id="status-priv" class="badge">&nbsp;</span>
+    <span id="status-shell" class="muted"></span>
+    <span class="spacer"></span>
+    <span id="status-msg" class="muted"></span>
+    <span id="status-mic" class="muted" hidden></span>
+    <span id="status-versions" class="muted"></span>
+  </footer>
+
+  <div id="drop-overlay" hidden>
+    <div class="drop-card">
+      <div class="drop-icon">&#128193;</div>
+      <div class="drop-title">Suelta los archivos aqui</div>
+      <div class="drop-sub">Se insertaran sus rutas completas en el terminal</div>
+    </div>
+  </div>
+
+  <div id="mic-overlay" hidden>
+    <div class="mic-card">
+      <div class="mic-pulse"></div>
+      <div class="mic-title">Escuchando<span id="mic-timer"></span></div>
+      <div class="mic-sub">Pulsa el boton del microfono, Ctrl+Shift+M o Esc para terminar</div>
+      <button id="mic-stop" class="primary">Detener y transcribir</button>
+      <button id="mic-cancel" class="ghost">Cancelar</button>
+    </div>
+  </div>
+
+  <div id="settings-modal" hidden>
+    <div class="modal-backdrop" data-close="1"></div>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+      <header class="modal-head">
+        <h2 id="settings-title">Ajustes</h2>
+        <button id="settings-close" class="icon-btn" aria-label="Cerrar">&times;</button>
+      </header>
+
+      <div class="modal-body">
+        <section>
+          <h3>Apariencia</h3>
+          <label class="row">
+            <span>Fuente</span>
+            <select id="set-fontFamily"></select>
+          </label>
+          <label class="row">
+            <span>Tamano</span>
+            <input id="set-fontSize" type="number" min="8" max="40" step="1" />
+          </label>
+          <label class="row">
+            <span>Interlineado</span>
+            <input id="set-lineHeight" type="number" min="1" max="2.5" step="0.05" />
+          </label>
+          <label class="row">
+            <span>Espaciado entre letras</span>
+            <input id="set-letterSpacing" type="number" min="-1" max="4" step="0.1" />
+          </label>
+          <label class="row">
+            <span>Grosor</span>
+            <select id="set-fontWeight">
+              <option value="300">Ligero</option>
+              <option value="400">Normal</option>
+              <option value="500">Medio</option>
+              <option value="600">Semi-negrita</option>
+            </select>
+          </label>
+          <label class="row">
+            <span>Tema</span>
+            <select id="set-theme">
+              <option value="oscuro">Oscuro</option>
+              <option value="oscuro-suave">Oscuro suave</option>
+              <option value="claro">Claro</option>
+            </select>
+          </label>
+          <label class="row">
+            <span>Cursor</span>
+            <select id="set-cursorStyle">
+              <option value="bar">Barra</option>
+              <option value="block">Bloque</option>
+              <option value="underline">Subrayado</option>
+            </select>
+          </label>
+          <label class="row check">
+            <input id="set-cursorBlink" type="checkbox" />
+            <span>Cursor parpadeante</span>
+          </label>
+          <label class="row check">
+            <input id="set-highContrast" type="checkbox" />
+            <span>Forzar contraste minimo legible (AA)</span>
+          </label>
+        </section>
+
+        <section>
+          <h3>Terminal</h3>
+          <label class="row">
+            <span>Shell por defecto</span>
+            <select id="set-shell"></select>
+          </label>
+          <label class="row">
+            <span>Carpeta inicial</span>
+            <span class="inline">
+              <input id="set-startCwd" type="text" placeholder="(carpeta del usuario)" />
+              <button id="btn-pick-cwd" class="ghost small">Elegir</button>
+            </span>
+          </label>
+          <label class="row">
+            <span>Historial (lineas)</span>
+            <input id="set-scrollback" type="number" min="1000" max="200000" step="1000" />
+          </label>
+          <label class="row check">
+            <input id="set-autoElevate" type="checkbox" />
+            <span>Pedir permisos de administrador al abrir</span>
+          </label>
+          <label class="row check">
+            <input id="set-confirmClose" type="checkbox" />
+            <span>Confirmar antes de cerrar una pestana activa</span>
+          </label>
+        </section>
+
+        <section>
+          <h3>Microfono (dictado)</h3>
+          <p class="hint">
+            El audio se graba localmente y se envia al endpoint de transcripcion que configures
+            (compatible con la API de OpenAI: OpenAI, Groq, o tu propio servidor Whisper).
+            El texto resultante se escribe en el terminal.
+          </p>
+          <label class="row">
+            <span>Endpoint</span>
+            <input id="set-stt-endpoint" type="text" spellcheck="false" />
+          </label>
+          <label class="row">
+            <span>Modelo</span>
+            <input id="set-stt-model" type="text" spellcheck="false" />
+          </label>
+          <label class="row">
+            <span>API key</span>
+            <input id="set-stt-apiKey" type="password" spellcheck="false" placeholder="sk-..." />
+          </label>
+          <label class="row">
+            <span>Idioma</span>
+            <input id="set-stt-language" type="text" spellcheck="false" placeholder="es" />
+          </label>
+          <label class="row">
+            <span>Microfono</span>
+            <span class="inline">
+              <select id="set-stt-device"></select>
+              <button id="btn-mic-perm" class="ghost small">Permitir</button>
+            </span>
+          </label>
+          <label class="row check">
+            <input id="set-stt-autoSend" type="checkbox" />
+            <span>Enviar automaticamente (Enter) tras transcribir</span>
+          </label>
+          <p class="hint">
+            Sin API key puedes usar el dictado nativo de Windows (Win+H), pero Windows
+            bloquea la escritura del dictado en ventanas elevadas: solo funciona si abres
+            AdminTerm en modo normal.
+          </p>
+        </section>
+
+        <section>
+          <h3>Atajos</h3>
+          <ul class="shortcuts">
+            <li><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>T</kbd> nueva pestana</li>
+            <li><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>W</kbd> cerrar pestana</li>
+            <li><kbd>Ctrl</kbd>+<kbd>Tab</kbd> siguiente pestana</li>
+            <li><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>C</kbd> / <kbd>V</kbd> copiar / pegar</li>
+            <li><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>F</kbd> buscar</li>
+            <li><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>M</kbd> microfono</li>
+            <li><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>O</kbd> insertar archivos</li>
+            <li><kbd>Ctrl</kbd>+<kbd>+</kbd> / <kbd>-</kbd> / <kbd>0</kbd> tamano de fuente</li>
+          </ul>
+          <p class="hint" id="paths-hint"></p>
+        </section>
+      </div>
+
+      <footer class="modal-foot">
+        <button id="settings-reset" class="ghost">Restablecer</button>
+        <span class="spacer"></span>
+        <button id="settings-done" class="primary">Listo</button>
+      </footer>
+    </div>
+  </div>
+
+  <div id="toast" hidden></div>
+
+  <script src="vendor/xterm.js"></script>
+  <script src="vendor/addon-fit.js"></script>
+  <script src="vendor/addon-search.js"></script>
+  <script src="vendor/addon-unicode11.js"></script>
+  <script src="vendor/addon-web-links.js"></script>
+  <script src="vendor/addon-webgl.js"></script>
+  <script src="renderer.js"></script>
+</body>
+</html>
