@@ -1,6 +1,6 @@
 'use strict';
 
-const { app, BrowserWindow, ipcMain, dialog, shell, Menu } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, Menu, clipboard } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -109,22 +109,31 @@ function psQuote(value) {
   return `'${String(value).replace(/'/g, "''")}'`;
 }
 
-/** Relanza la app pidiendo UAC. Devuelve true si el proceso elevado arranco. */
-function relaunchElevated() {
+/**
+ * Construye el comando PowerShell que relanza la app con UAC. Se puede
+ * inspeccionar con `--print-elevate-command`, porque el entrecomillado de
+ * rutas con espacios es la parte facil de romper y dificil de probar.
+ */
+function buildElevateCommand() {
   const exe = process.execPath;
   const rest = process.defaultApp
     ? [path.resolve(process.argv[1] || '.'), ...process.argv.slice(2)]
     : process.argv.slice(1);
-  const args = rest.filter((a) => a !== '--no-elevate' && a !== '--elevated');
+  const args = rest.filter((a) => !['--no-elevate', '--elevated', '--print-elevate-command'].includes(a));
 
-  // Cada argumento va entrecomillado para sobrevivir rutas con espacios.
+  // Start-Process une -ArgumentList con espacios sin entrecomillar, asi que
+  // cada argumento lleva sus propias comillas dobles dentro del literal.
   const argList = args.map((a) => psQuote(`"${String(a).replace(/"/g, '\\"')}"`)).join(',');
   const parts = [`Start-Process -FilePath ${psQuote(exe)}`, '-Verb RunAs'];
   if (argList) parts.push(`-ArgumentList ${argList}`);
   parts.push(`-WorkingDirectory ${psQuote(process.cwd())}`);
+  return parts.join(' ');
+}
 
+/** Relanza la app pidiendo UAC. Devuelve true si el proceso elevado arranco. */
+function relaunchElevated() {
   try {
-    execFileSync(POWERSHELL, ['-NoProfile', '-NonInteractive', '-Command', parts.join(' ')], {
+    execFileSync(POWERSHELL, ['-NoProfile', '-NonInteractive', '-Command', buildElevateCommand()], {
       windowsHide: true,
       stdio: 'ignore',
       timeout: 60000,
@@ -133,6 +142,11 @@ function relaunchElevated() {
   } catch {
     return false; // UAC cancelado o bloqueado por politica
   }
+}
+
+if (process.argv.includes('--print-elevate-command')) {
+  process.stdout.write(buildElevateCommand() + '\n');
+  process.exit(0);
 }
 
 const elevated = isElevated();
@@ -400,6 +414,13 @@ const SELFTEST_SCRIPT = String.raw`
   add('primera pestana', !!t0, t0 ? t0.term.cols + 'x' + t0.term.rows + ' · ' + t0.term.options.fontFamily : 'sin pestana');
   if (!t0) return { checks };
 
+  // ConPTY manda la ruta del .exe como titulo: la pestana no debe mostrarla.
+  await sleep(600);
+  add('titulo de pestana', !/\.exe/i.test(t0.title), 'muestra "' + t0.title + '"');
+
+  // El titulo de la ventana debe delatar si hay privilegios de administrador.
+  add('titulo de ventana', /AdminTerm/.test(document.title), document.title);
+
   // --- el PTY responde de verdad ---
   window.adminterm.ptyInput(t0.id, 'echo SELFTEST_MARKER_A\r');
   const echoDeadline = Date.now() + 12000;
@@ -445,13 +466,37 @@ const SELFTEST_SCRIPT = String.raw`
   add('insertar archivos', pathOk, pathOk ? 'ruta con espacios entrecomillada' : 'no aparecio en el prompt');
   window.adminterm.ptyInput(activeTab.id, '\u0003'); // Ctrl+C: limpia la linea
 
-  // --- modal de ajustes ---
+  // --- modal de ajustes (se comprueba el estilo calculado, no solo [hidden]) ---
+  const shown = (id) => getComputedStyle(document.getElementById(id)).display !== 'none';
   app.openSettings();
-  const modalOpen = !document.getElementById('settings-modal').hidden &&
-    document.getElementById('set-fontSize').value === '19';
+  const modalOpen = shown('settings-modal') && document.getElementById('set-fontSize').value === '19';
   app.closeSettings();
-  const modalClosed = document.getElementById('settings-modal').hidden;
-  add('panel de ajustes', modalOpen && modalClosed, 'abre, refleja valores y cierra');
+  const modalClosed = !shown('settings-modal');
+  add('panel de ajustes', modalOpen && modalClosed, 'abre, refleja valores y cierra de verdad');
+
+  // El aviso de "ruta insertada" debe desaparecer solo...
+  const toastDeadline = Date.now() + 8000;
+  while (shown('toast') && Date.now() < toastDeadline) await sleep(250);
+  add('aviso se auto-oculta', !shown('toast'), 'el toast desaparece solo');
+
+  // ...y en reposo no debe quedar ninguna capa superpuesta encima del terminal.
+  const overlays = ['drop-overlay', 'mic-overlay', 'search-bar', 'toast', 'settings-modal'].filter(shown);
+  add('capas en reposo', overlays.length === 0, overlays.length ? 'visibles por error: ' + overlays.join(', ') : 'todas ocultas');
+
+  // --- portapapeles (copiar/pegar), preservando lo que tuviera el usuario ---
+  const previousClip = await window.adminterm.readClipboard();
+  await window.adminterm.writeClipboard('ADMINTERM_CLIP_PROBE');
+  const clipOk = (await window.adminterm.readClipboard()) === 'ADMINTERM_CLIP_PROBE';
+  await window.adminterm.writeClipboard(previousClip);
+  add('portapapeles', clipOk, 'lectura/escritura via preload');
+
+  // --- contrato IPC de transcripcion (sin key no debe llamar a la red) ---
+  if (app.settings.stt.apiKey) {
+    add('IPC transcripcion', true, 'omitido: hay una API key configurada');
+  } else {
+    const stt = await window.adminterm.transcribe(new Uint8Array([1, 2, 3]), 'audio/webm', 'probe.webm');
+    add('IPC transcripcion', stt && stt.ok === false && stt.code === 'NO_KEY', 'error NO_KEY como se espera');
+  }
 
   // --- cerrar pestana ---
   app.destroyTab(app.tabs[1]);
@@ -462,6 +507,53 @@ const SELFTEST_SCRIPT = String.raw`
   return { checks };
 })()
 `;
+
+/**
+ * Con `--shot <ruta.png>` guarda una captura de la ventana. La coloca fuera
+ * de la pantalla para no interrumpir lo que el usuario este haciendo.
+ */
+async function maybeScreenshot(win) {
+  const i = process.argv.indexOf('--shot');
+  if (i < 0 || !process.argv[i + 1]) return;
+  const target = path.resolve(process.argv[i + 1]);
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  win.setPosition(-4000, 60);
+  win.setSize(1280, 800);
+  win.show();
+  await wait(700);
+
+  // Algo de salida real para que la captura muestre el terminal en uso.
+  const [first] = [...sessions.values()];
+  if (first) {
+    first.proc.write('Get-ChildItem $env:USERPROFILE | Select-Object -First 6 Mode,Length,Name\r');
+    await wait(1600);
+    first.proc.write('claude --version; node --version\r');
+    await wait(2500);
+  }
+
+  const shoot = async (file) => {
+    const image = await win.webContents.capturePage();
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, image.toPNG());
+    console.log(`  (captura guardada en ${file})`);
+  };
+
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  await shoot(target);
+
+  // Segunda toma: tema claro con el panel de ajustes abierto.
+  await win.webContents.executeJavaScript(
+    "window.__adminTerm.patchSettings({ theme: 'claro' }).then(() => window.__adminTerm.openSettings())"
+  );
+  await wait(900);
+  await shoot(target.replace(/\.png$/i, '') + '-claro.png');
+  await win.webContents.executeJavaScript(
+    "window.__adminTerm.closeSettings(); window.__adminTerm.patchSettings({ theme: 'oscuro' })"
+  );
+
+  win.hide();
+}
 
 /**
  * Modo `--selftest`: arranca sin mostrar ventana, ejerce la app de punta a
@@ -491,18 +583,29 @@ function runSelfTest(win) {
       console.log(`  (fallo al cerrar las sesiones PTY: ${err.message})`);
     }
 
+    // Cerramos la ventana en vez de llamar a app.exit(): asi el propio
+    // selftest ejerce el camino de cierre real de la app y comprueba que no
+    // deja procesos colgados. app.exit() con la ventana viva se bloquea.
     setTimeout(() => {
-      console.log('  (saliendo)');
-      app.exit(ok ? 0 : 1);
-      // Red de seguridad: si el apagado de Electron se queda esperando a
-      // ConPTY, forzamos la salida del proceso.
-      setTimeout(() => process.exit(ok ? 0 : 1), 1500);
+      const hard = setTimeout(() => {
+        console.log('  FALLO cierre de ventana....... no termino en 6s');
+        process.exit(1);
+      }, 6000);
+      win.once('closed', () => {
+        clearTimeout(hard);
+        console.log(`  OK   cierre de ventana......... limpio (sesiones PTY vivas: ${sessions.size})`);
+        pendingExitCode = ok && sessions.size === 0 ? 0 : 1;
+        // 'window-all-closed' saldra con ese codigo; esto es solo la reserva.
+        setTimeout(() => process.exit(pendingExitCode), 3000);
+      });
+      win.close();
     }, 400);
   };
 
   win.webContents.once('did-finish-load', async () => {
     try {
       const result = await win.webContents.executeJavaScript(SELFTEST_SCRIPT);
+      await maybeScreenshot(win);
 
       const lines = [`  elevado........... ${elevated}`, `  shells detectadas. ${SHELLS.map((s) => s.key).join(', ')}`];
       for (const check of result.checks) {
@@ -520,12 +623,16 @@ function runSelfTest(win) {
 
 app.whenReady().then(createWindow);
 
+// Codigo con el que saldra el proceso al cerrarse la ultima ventana.
+let pendingExitCode = 0;
+
 app.on('window-all-closed', () => {
   killAllSessions();
-  app.quit();
-  // El apagado de Electron puede quedarse esperando a que ConPTY libere sus
-  // handles; sin esto la app sobreviviria como proceso fantasma.
-  setTimeout(() => process.exit(0), 2500).unref();
+  // Salida directa en lugar de app.quit(): el apagado "elegante" de Electron
+  // se bloquea esperando a que ConPTY libere sus handles y la app sobrevive
+  // como proceso fantasma (reproducible en la build empaquetada). No hay nada
+  // que vaciar: los ajustes se escriben de forma sincrona en cada cambio.
+  process.exit(pendingExitCode);
 });
 
 app.on('before-quit', killAllSessions);
@@ -624,6 +731,10 @@ ipcMain.handle('sys:relaunchElevated', () => {
 ipcMain.handle('sys:openExternal', (_e, url) => {
   if (/^https?:/i.test(url)) shell.openExternal(url);
 });
+
+// El modulo `clipboard` del renderer esta deprecado, asi que vive aqui.
+ipcMain.handle('clipboard:read', () => clipboard.readText());
+ipcMain.handle('clipboard:write', (_e, text) => clipboard.writeText(String(text ?? '')));
 
 ipcMain.handle('stt:transcribe', async (_e, { bytes, mimeType, filename }) => {
   const stt = getSettings().stt;

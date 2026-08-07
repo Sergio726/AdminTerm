@@ -26,6 +26,11 @@ html[data-ui="claro"] {
 
 * { box-sizing: border-box; }
 
+/* Las capas de abajo se posicionan con `display: flex`, que gana al
+   `display: none` que el navegador aplica por el atributo [hidden].
+   Sin esto, el panel de ajustes y los overlays estarian siempre visibles. */
+[hidden] { display: none !important; }
+
 html, body {
   margin: 0;
   height: 100%;

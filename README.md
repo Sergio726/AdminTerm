@@ -26,9 +26,13 @@ y genera el icono.
 | --- | --- |
 | Arranque normal (pide UAC) | `npm start` o doble clic en `Iniciar-AdminTerm.bat` |
 | Sin pedir administrador | `npm run start:normal` |
-| Comprobar que todo funciona | `npm run selftest` |
+| Comprobar que todo funciona | `npm run selftest` (18 comprobaciones, sin abrir ventana) |
 | Acceso directo en Escritorio + Inicio | `powershell -ExecutionPolicy Bypass -File Crear-acceso-directo.ps1` |
 | Generar un `.exe` distribuible | `npm run build` (portable) o `npm run dist` (instalador) |
+
+`npm run build` deja un ejecutable autocontenido en
+`dist\AdminTerm-portable-1.0.0.exe` (~86 MB) que funciona en cualquier Windows
+x64 sin Node ni instalación.
 
 Al abrir, AdminTerm se relanza a sí misma pidiendo UAC. Si cancelas el aviso, la
 app sigue abriéndose en modo normal y muestra un botón **Reiniciar como admin**
@@ -95,6 +99,19 @@ manipule una ventana elevada. No son fallos de AdminTerm:
 2. **El dictado nativo de Windows (`Win+H`) no escribe en la ventana elevada**, por
    la misma razón. Por eso el micrófono de AdminTerm graba y transcribe por su
    cuenta en vez de depender de `Win+H`: así sí funciona con permisos de admin.
+
+## Diagnóstico
+
+| Flag | Para qué sirve |
+| --- | --- |
+| `--selftest` | Arranca sin ventana, ejerce la app de punta a punta (PTY, pestañas, ajustes en vivo, temas, rutas, portapapeles, cierre) e imprime un informe. Sale con código 0 si todo pasa. |
+| `--shot ruta.png` | Guarda capturas de la interfaz (tema oscuro y claro) sin mostrar la ventana. Se combina con `--selftest`. |
+| `--print-elevate-command` | Imprime el comando PowerShell exacto que se usa para pedir UAC y sale. Útil si la elevación falla. |
+| `--no-elevate` | Arranca sin pedir permisos de administrador. |
+
+```bash
+node_modules\electron\dist\electron.exe . --no-elevate --selftest
+```
 
 ## Seguridad
 

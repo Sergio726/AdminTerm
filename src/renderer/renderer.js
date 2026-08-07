@@ -117,6 +117,18 @@ function fontStack(primary) {
     .join(', ');
 }
 
+/**
+ * ConPTY anuncia como titulo la ruta completa del ejecutable de la shell, que
+ * no dice nada util. En ese caso conservamos el nombre amigable; cuando una
+ * CLI pone un titulo de verdad (Claude, Codex, vim...) lo mostramos.
+ */
+function prettyTitle(raw, fallback) {
+  const title = String(raw || '').trim();
+  if (!title) return fallback;
+  if (/[\\/]/.test(title) && /\.exe$/i.test(title)) return fallback;
+  return title.length > 40 ? title.slice(0, 39) + '…' : title;
+}
+
 function quotePath(p) {
   return /[\s&()^%!,;=`'{}[\]]/.test(p) ? `"${p}"` : p;
 }
@@ -265,9 +277,9 @@ async function newTab(shellKey) {
 
   term.onData((data) => api.ptyInput(tab.id, data));
   term.onTitleChange((t) => {
-    const clean = String(t || '').trim();
-    if (clean) {
-      tab.title = clean.length > 40 ? clean.slice(0, 39) + '…' : clean;
+    const next = prettyTitle(t, res.label);
+    if (next !== tab.title) {
+      tab.title = next;
       renderTabs();
     }
   });
@@ -360,8 +372,8 @@ api.onPtyExit(({ id, exitCode }) => {
 // Portapapeles y archivos
 // ---------------------------------------------------------------------------
 
-function pasteIntoTerm(tab) {
-  const text = api.readClipboard();
+async function pasteIntoTerm(tab) {
+  const text = await api.readClipboard();
   if (!text) return;
   api.ptyInput(tab.id, text.replace(/\r\n/g, '\r').replace(/\n/g, '\r'));
 }
@@ -850,6 +862,10 @@ async function boot() {
     els.shellSelect.appendChild(opt);
   }
   els.shellSelect.value = info.shells.some((s) => s.key === settings.shell) ? settings.shell : info.shells[0].key;
+
+  // El <title> del HTML pisa al de BrowserWindow, asi que el estado de
+  // privilegios se marca aqui: se ve en la barra de tareas y en Alt+Tab.
+  document.title = info.elevated ? 'AdminTerm — Administrador' : 'AdminTerm';
 
   document.documentElement.setAttribute('data-ui', settings.theme === 'claro' ? 'claro' : 'oscuro');
   bindToolbar();

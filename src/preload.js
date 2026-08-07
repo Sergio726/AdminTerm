@@ -1,6 +1,6 @@
 'use strict';
 
-const { contextBridge, ipcRenderer, webUtils, clipboard } = require('electron');
+const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 const listeners = { data: new Set(), exit: new Set() };
 
@@ -52,6 +52,6 @@ contextBridge.exposeInMainWorld('adminterm', {
   // --- sistema ---
   relaunchElevated: () => ipcRenderer.invoke('sys:relaunchElevated'),
   openExternal: (url) => ipcRenderer.invoke('sys:openExternal', url),
-  writeClipboard: (text) => clipboard.writeText(text),
-  readClipboard: () => clipboard.readText(),
+  writeClipboard: (text) => ipcRenderer.invoke('clipboard:write', text),
+  readClipboard: () => ipcRenderer.invoke('clipboard:read'),
 });
