@@ -2,13 +2,16 @@
 
 const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
-const listeners = { data: new Set(), exit: new Set() };
+const listeners = { data: new Set(), exit: new Set(), stt: new Set() };
 
 ipcRenderer.on('pty:data', (_e, payload) => {
   for (const fn of listeners.data) fn(payload);
 });
 ipcRenderer.on('pty:exit', (_e, payload) => {
   for (const fn of listeners.exit) fn(payload);
+});
+ipcRenderer.on('stt:status', (_e, message) => {
+  for (const fn of listeners.stt) fn(message);
 });
 
 contextBridge.exposeInMainWorld('adminterm', {
@@ -47,6 +50,11 @@ contextBridge.exposeInMainWorld('adminterm', {
   // --- microfono / dictado ---
   transcribe: (bytes, mimeType, filename) =>
     ipcRenderer.invoke('stt:transcribe', { bytes, mimeType, filename }),
+  // Progreso del arranque del servidor Whisper local (cargar el modelo tarda).
+  onSttStatus: (fn) => {
+    listeners.stt.add(fn);
+    return () => listeners.stt.delete(fn);
+  },
   windowsDictation: () => ipcRenderer.invoke('sys:winH'),
 
   // --- sistema ---

@@ -36,7 +36,11 @@
     "files": [
       "src/**/*",
       "!src/renderer/vendor/.gitkeep",
+      "tools/whisper-server/**",
       "package.json"
+    ],
+    "asarUnpack": [
+      "tools/whisper-server/**"
     ],
     "win": {
       "target": ["portable", "nsis"],

@@ -1,5 +1,7 @@
 node_modules/
 dist/
+dist2/
+__pycache__/
 src/renderer/vendor/
 build/icon.ico
 *.log

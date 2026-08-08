@@ -46,7 +46,7 @@ const STT_PRESETS = {
   openai: { endpoint: 'https://api.openai.com/v1/audio/transcriptions', model: 'whisper-1' },
   'openai-4o': { endpoint: 'https://api.openai.com/v1/audio/transcriptions', model: 'gpt-4o-mini-transcribe' },
   groq: { endpoint: 'https://api.groq.com/openai/v1/audio/transcriptions', model: 'whisper-large-v3-turbo' },
-  local: { endpoint: 'http://127.0.0.1:8000/v1/audio/transcriptions', model: 'whisper-1' },
+  local: { endpoint: 'http://127.0.0.1:8756/v1/audio/transcriptions', model: 'small' },
 };
 
 // ---------------------------------------------------------------------------
@@ -595,6 +595,11 @@ function destroyTab(tab) {
   scheduleSessionSave();
 }
 
+// Arrancar Whisper local puede tardar unos segundos: sin esto pareceria colgado.
+api.onSttStatus((message) => {
+  els.statusMsg.textContent = message;
+});
+
 api.onPtyData(({ id, data }) => {
   const pane = paneById(id);
   if (pane) pane.term.write(data);
@@ -727,8 +732,20 @@ function pickMimeType() {
   return '';
 }
 
+/**
+ * Un endpoint en esta maquina no necesita credencial. Se parsea la URL en vez
+ * de comparar cadenas: "https://127.0.0.1.ejemplo.com/" empieza por 127.0.0.1
+ * y NO es local. Misma regla que `endpointIsLocal()` en main.js.
+ */
 function sttNeedsKey() {
-  return !/^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])/i.test(settings.stt.endpoint || '');
+  try {
+    const { hostname } = new URL(settings.stt.endpoint || '');
+    // Anclado al final a proposito: "127.0.0.1.ejemplo.com" NO es local.
+    return !(hostname === 'localhost' || hostname === '::1' || hostname === '[::1]' ||
+      /^127(\.\d{1,3}){3}$/.test(hostname));
+  } catch {
+    return true;
+  }
 }
 
 async function startMic() {
@@ -809,8 +826,11 @@ async function onMicStop() {
   els.statusMsg.textContent = '';
 
   if (!res.ok) {
-    if (res.code === 'NO_KEY') toast(res.error, 'error', { label: 'Abrir ajustes', run: openSettings });
-    else toast(`Transcripcion fallida. ${res.error}`, 'error');
+    if (res.code === 'NO_KEY' || res.code === 'LOCAL_SERVER') {
+      toast(res.error, 'error', { label: 'Abrir ajustes', run: openSettings });
+    } else {
+      toast(`Transcripcion fallida. ${res.error}`, 'error');
+    }
     return;
   }
   if (!res.text) {
@@ -1119,6 +1139,8 @@ function fillSettingsForm() {
   $('set-stt-apiKey').value = settings.stt.apiKey;
   $('set-stt-language').value = settings.stt.language;
   $('set-stt-autoSend').checked = !!settings.stt.autoSend;
+  $('set-stt-autoStartLocal').checked = !!settings.stt.autoStartLocal;
+  $('set-stt-pythonPath').value = settings.stt.pythonPath;
   $('paths-hint').textContent = `Ajustes guardados en: ${info.settingsFile}`;
 }
 
@@ -1158,12 +1180,16 @@ function bindSettingsForm() {
     'set-stt-apiKey': 'apiKey',
     'set-stt-language': 'language',
     'set-stt-device': 'deviceId',
+    'set-stt-pythonPath': 'pythonPath',
   };
   for (const [id, key] of Object.entries(stt)) {
     $(id).addEventListener('change', (e) => patchSettings({ stt: { [key]: e.target.value } }));
   }
   $('set-stt-autoSend').addEventListener('change', (e) =>
     patchSettings({ stt: { autoSend: e.target.checked } })
+  );
+  $('set-stt-autoStartLocal').addEventListener('change', (e) =>
+    patchSettings({ stt: { autoStartLocal: e.target.checked } })
   );
 
   $('set-stt-preset').addEventListener('change', async (e) => {

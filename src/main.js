@@ -50,6 +50,10 @@ const DEFAULTS = {
     language: 'es',
     deviceId: '',
     autoSend: false,
+    // Con un endpoint local, AdminTerm levanta el servidor Whisper por su
+    // cuenta la primera vez que se dicta. `pythonPath` vacio = autodetectar.
+    autoStartLocal: true,
+    pythonPath: '',
   },
 };
 
@@ -332,6 +336,196 @@ function sendWinH() {
 }
 
 // ---------------------------------------------------------------------------
+// Servidor Whisper local (dictado sin conexion ni API key)
+// ---------------------------------------------------------------------------
+
+// Tamanos que el servidor local sabe cargar por nombre; cualquier otro valor
+// (p.ej. "whisper-1") se trata como "usa el de por defecto".
+const WHISPER_SIZES = new Set([
+  'tiny', 'tiny.en', 'base', 'base.en', 'small', 'small.en',
+  'medium', 'medium.en', 'large-v1', 'large-v2', 'large-v3',
+  'large-v3-turbo', 'turbo', 'distil-small.en', 'distil-large-v3',
+]);
+
+/**
+ * ¿El endpoint apunta a esta maquina? Se parsea la URL en vez de usar una
+ * expresion regular sobre la cadena: "https://127.0.0.1.ejemplo.com/" empieza
+ * por 127.0.0.1 y NO es local, y tratarla como tal saltaria la exigencia de
+ * API key contra un servidor ajeno.
+ * El renderer tiene la misma comprobacion en `sttNeedsKey()`.
+ */
+function endpointIsLocal(endpoint) {
+  try {
+    const { hostname } = new URL(String(endpoint));
+    // El anclaje final es lo que importa: sin el, "127.0.0.1.ejemplo.com"
+    // (un host de terceros) pasaria por local.
+    return hostname === 'localhost' || hostname === '::1' || hostname === '[::1]' ||
+      /^127(\.\d{1,3}){3}$/.test(hostname);
+  } catch {
+    return false;
+  }
+}
+
+function findPython() {
+  const configured = getSettings().stt.pythonPath;
+  if (configured && fs.existsSync(configured)) return configured;
+
+  const localApp = process.env.LOCALAPPDATA || '';
+  const versions = ['313', '312', '311', '310', '39'];
+  const candidates = [
+    ...versions.map((v) => `C:\\Python${v}\\python.exe`),
+    ...versions.map((v) => path.join(localApp, 'Programs', 'Python', `Python${v}`, 'python.exe')),
+  ];
+  const found = firstExisting(candidates);
+  if (found) return found;
+
+  try {
+    const out = execFileSync(path.join(SYS32, 'where.exe'), ['python'], {
+      encoding: 'utf8',
+      windowsHide: true,
+      timeout: 5000,
+    });
+    // El "python.exe" de WindowsApps es el stub que abre la Microsoft Store.
+    return out.split(/\r?\n/).map((l) => l.trim()).find((l) => l && !l.includes('WindowsApps')) || null;
+  } catch {
+    return null;
+  }
+}
+
+/** El .py no se puede ejecutar dentro del asar: se sirve desde app.asar.unpacked. */
+function whisperScriptPath() {
+  const base = app.getAppPath().replace(/app\.asar$/, 'app.asar.unpacked');
+  return path.join(base, 'tools', 'whisper-server', 'server.py');
+}
+
+let localServer = null; // { proc, origin } solo si lo arrancamos nosotros
+let localServerStarting = null; // promesa compartida para peticiones simultaneas
+
+/**
+ * null = nadie escucha · { foreign: true } = el puerto lo ocupa otro servicio
+ * · objeto = es nuestro servidor.
+ */
+async function probeWhisperHealth(origin, timeoutMs = 1500) {
+  try {
+    const res = await fetch(`${origin}/health`, { signal: AbortSignal.timeout(timeoutMs) });
+    if (!res.ok) return { foreign: true };
+    const body = await res.json();
+    return body && body.service === 'adminterm-whisper' ? body : { foreign: true };
+  } catch {
+    return null;
+  }
+}
+
+async function startLocalServer(url, notify) {
+  const python = findPython();
+  if (!python) {
+    return { ok: false, error: 'No se encontro Python. Indica su ruta en Ajustes o instala Python 3.10+.' };
+  }
+  const script = whisperScriptPath();
+  if (!fs.existsSync(script)) {
+    return { ok: false, error: `No se encontro el servidor en ${script}` };
+  }
+
+  const stt = getSettings().stt;
+  const size = WHISPER_SIZES.has(stt.model) ? stt.model : 'small';
+  const origin = `${url.protocol}//${url.host}`;
+  const port = url.port || (url.protocol === 'https:' ? '443' : '80');
+
+  notify(`Arrancando Whisper local (${size})…`);
+  const proc = spawn(
+    python,
+    [script, '--host', url.hostname, '--port', String(port), '--model', size],
+    { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] }
+  );
+
+  let stderr = '';
+  let exited = null;
+  proc.stdout.on('data', (d) => {
+    for (const raw of String(d).split('\n')) {
+      // El servidor ya escribe su propio prefijo: no se duplica.
+      const line = raw.trim().replace(/^\[whisper\]\s*/, '');
+      if (!line) continue;
+      console.log('[whisper]', line);
+      notify(line);
+    }
+  });
+  proc.stderr.on('data', (d) => {
+    stderr += String(d);
+  });
+  proc.on('exit', (code) => {
+    exited = code;
+  });
+
+  localServer = { proc, origin };
+
+  // Cargar el modelo lleva unos segundos la primera vez; la primera descarga
+  // de un modelo nuevo, bastante mas.
+  const deadline = Date.now() + 180000;
+  while (Date.now() < deadline) {
+    if (exited !== null) {
+      localServer = null;
+      const detail = stderr.trim().split('\n').slice(-3).join(' ').slice(0, 300);
+      return { ok: false, error: `El servidor local termino con codigo ${exited}. ${detail}` };
+    }
+    const health = await probeWhisperHealth(origin, 1200);
+    if (health && !health.foreign) {
+      notify('Whisper local listo.');
+      return { ok: true, started: true };
+    }
+    await new Promise((r) => setTimeout(r, 700));
+  }
+
+  stopLocalServer();
+  return { ok: false, error: 'El servidor local no respondio en 3 minutos.' };
+}
+
+async function ensureLocalServer(endpoint, notify = () => {}) {
+  let url;
+  try {
+    url = new URL(endpoint);
+  } catch {
+    return { ok: false, error: `Endpoint no valido: ${endpoint}` };
+  }
+  const origin = `${url.protocol}//${url.host}`;
+
+  const health = await probeWhisperHealth(origin);
+  if (health && !health.foreign) return { ok: true, already: true };
+  if (health && health.foreign) {
+    return { ok: false, error: `El puerto ${url.port} lo ocupa otro servicio distinto a Whisper.` };
+  }
+
+  if (SELFTEST) return { ok: false, error: 'Arranque del servidor local desactivado en modo prueba.' };
+  if (!getSettings().stt.autoStartLocal) {
+    return { ok: false, error: 'El servidor local no responde y el arranque automatico esta desactivado.' };
+  }
+
+  // Si dos dictados coinciden, ambos esperan al mismo arranque.
+  if (!localServerStarting) {
+    localServerStarting = startLocalServer(url, notify).finally(() => {
+      localServerStarting = null;
+    });
+  }
+  return localServerStarting;
+}
+
+function stopLocalServer() {
+  if (!localServer || !localServer.proc) return;
+  const { pid } = localServer.proc;
+  localServer = null;
+  try {
+    // taskkill /T porque uvicorn puede dejar descendencia; mismo cuidado que
+    // con los PTY para no dejar procesos huerfanos.
+    execFileSync(path.join(SYS32, 'taskkill.exe'), ['/PID', String(pid), '/T', '/F'], {
+      windowsHide: true,
+      stdio: 'ignore',
+      timeout: 5000,
+    });
+  } catch {
+    /* ya habia terminado */
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Ventana
 // ---------------------------------------------------------------------------
 
@@ -595,7 +789,9 @@ const SELFTEST_SCRIPT = String.raw`
   // --- insercion de rutas de archivos (con espacios -> entrecomilladas) ---
   const probe = 'C:\\carpeta de prueba\\informe final.txt';
   app.insertPaths([probe]);
-  const pathDeadline = Date.now() + 6000;
+  // Margen amplio: con la maquina cargada, el eco de la shell tarda mas y
+  // esta comprobacion daba falsos negativos.
+  const pathDeadline = Date.now() + 15000;
   let pathOk = false;
   const activeTab = app.activeTab;
   while (Date.now() < pathDeadline && !pathOk) {
@@ -635,6 +831,15 @@ const SELFTEST_SCRIPT = String.raw`
   } else {
     const stt = await window.adminterm.transcribe(new Uint8Array([1, 2, 3]), 'audio/webm', 'probe.webm');
     add('IPC transcripcion', stt && stt.ok === false && stt.code === 'NO_KEY', 'error NO_KEY como se espera');
+
+    // Regresion real: con endpoint local NO debe exigirse API key. Y el modo
+    // prueba no debe arrancar el servidor, asi que se espera LOCAL_SERVER.
+    const original = app.settings.stt.endpoint;
+    await app.patchSettings({ stt: { endpoint: 'http://127.0.0.1:8756/v1/audio/transcriptions' } });
+    const localRes = await window.adminterm.transcribe(new Uint8Array([1, 2, 3]), 'audio/webm', 'probe.webm');
+    await app.patchSettings({ stt: { endpoint: original } });
+    add('local sin API key', !!localRes && localRes.code !== 'NO_KEY',
+      'devuelve ' + ((localRes && (localRes.code || (localRes.ok ? 'ok' : 'error'))) || 'nada') + ', no NO_KEY');
   }
 
   // --- cerrar pestana ---
@@ -727,6 +932,7 @@ function runSelfTest(win) {
     // tuberia del proceso que nos lanzo nunca se cierra.
     try {
       killAllSessions();
+      stopLocalServer();
       console.log('  (sesiones PTY cerradas)');
     } catch (err) {
       console.log(`  (fallo al cerrar las sesiones PTY: ${err.message})`);
@@ -756,6 +962,39 @@ function runSelfTest(win) {
       const result = await win.webContents.executeJavaScript(SELFTEST_SCRIPT);
       await maybeScreenshot(win);
 
+      // Comprobaciones que viven en el proceso principal y no en el renderer.
+      const localCases = [
+        ['http://127.0.0.1:8756/v1/audio/transcriptions', true],
+        ['http://localhost:8756/v1/audio/transcriptions', true],
+        ['http://[::1]:8756/v1/audio/transcriptions', true],
+        ['https://api.openai.com/v1/audio/transcriptions', false],
+        ['https://api.groq.com/openai/v1/audio/transcriptions', false],
+        // Trampa: empieza por 127.0.0.1 pero es un host ajeno. Si se colase
+        // como local, se enviaria audio a un tercero sin exigir API key.
+        ['https://127.0.0.1.ejemplo.com/v1/audio/transcriptions', false],
+      ];
+      const wrong = localCases.filter(([url, expected]) => endpointIsLocal(url) !== expected);
+      result.checks.push({
+        name: 'endpoint local o remoto',
+        ok: wrong.length === 0,
+        detail: wrong.length ? 'mal clasificados: ' + wrong.map(([u]) => u).join(', ')
+          : `${localCases.length} casos, incluida la trampa 127.0.0.1.ejemplo.com`,
+      });
+
+      const python = findPython();
+      result.checks.push({
+        name: 'python para Whisper',
+        ok: !!python,
+        detail: python || 'no encontrado (el dictado local no arrancaria)',
+      });
+
+      const script = whisperScriptPath();
+      result.checks.push({
+        name: 'servidor Whisper presente',
+        ok: fs.existsSync(script),
+        detail: fs.existsSync(script) ? script : `falta ${script}`,
+      });
+
       const lines = [`  elevado........... ${elevated}`, `  shells detectadas. ${SHELLS.map((s) => s.key).join(', ')}`];
       for (const check of result.checks) {
         lines.push(`  ${check.ok ? 'OK  ' : 'FALLO'} ${check.name.padEnd(24, '.')} ${check.detail}`);
@@ -770,13 +1009,66 @@ function runSelfTest(win) {
   setTimeout(() => finish(false, 'selftest: FALLO por timeout global (90s)'), 90000);
 }
 
-app.whenReady().then(createWindow);
+/**
+ * `--stt-check` ejerce el camino real del dictado sin ventana ni microfono:
+ * arranca el servidor local si hace falta, transcribe y mide.
+ *
+ * Los parametros llegan por entorno (ADMINTERM_STT_FILE / _ENDPOINT / _MODEL /
+ * _LANGUAGE) y no por argv: Electron se come parte de la linea de comandos y
+ * con varios pares "--flag valor" el proceso muere antes de arrancar.
+ * Los ajustes se tocan solo en memoria, no se guardan.
+ */
+async function runSttCheck() {
+  const file = process.env.ADMINTERM_STT_FILE;
+  const stt = getSettings().stt;
+  if (process.env.ADMINTERM_STT_ENDPOINT) stt.endpoint = process.env.ADMINTERM_STT_ENDPOINT;
+  if (process.env.ADMINTERM_STT_MODEL) stt.model = process.env.ADMINTERM_STT_MODEL;
+  if (process.env.ADMINTERM_STT_LANGUAGE) stt.language = process.env.ADMINTERM_STT_LANGUAGE;
+
+  const done = (code, ...lines) => {
+    for (const line of lines) console.log(line);
+    stopLocalServer();
+    setTimeout(() => process.exit(code), 300);
+  };
+
+  if (!file || !fs.existsSync(file)) return done(1, `stt-check: no se encontro el audio "${file}"`);
+
+  console.log(`stt-check: ${path.basename(file)} -> ${stt.endpoint} (modelo ${stt.model})`);
+  const t0 = Date.now();
+  let ready = t0;
+  const result = await transcribeAudio(
+    {
+      bytes: fs.readFileSync(file),
+      mimeType: file.toLowerCase().endsWith('.wav') ? 'audio/wav' : 'audio/webm',
+      filename: path.basename(file),
+    },
+    (message) => {
+      console.log(`  · ${message}`);
+      if (/listo/i.test(message)) ready = Date.now();
+    }
+  );
+
+  if (!result.ok) return done(1, `stt-check: FALLO (${result.code || 'error'}) ${result.error}`);
+  return done(
+    0,
+    `stt-check: OK`,
+    `  arranque del servidor... ${((ready - t0) / 1000).toFixed(1)}s`,
+    `  transcripcion........... ${((Date.now() - ready) / 1000).toFixed(1)}s`,
+    `  texto................... "${result.text}"`
+  );
+}
+
+app.whenReady().then(() => {
+  if (process.argv.includes('--stt-check')) return runSttCheck();
+  return createWindow();
+});
 
 // Codigo con el que saldra el proceso al cerrarse la ultima ventana.
 let pendingExitCode = 0;
 
 app.on('window-all-closed', () => {
   killAllSessions();
+  stopLocalServer();
   // Salida directa en lugar de app.quit(): el apagado "elegante" de Electron
   // se bloquea esperando a que ConPTY libere sus handles y la app sobrevive
   // como proceso fantasma (reproducible en la build empaquetada). No hay nada
@@ -890,11 +1182,24 @@ ipcMain.handle('sys:openExternal', (_e, url) => {
 ipcMain.handle('clipboard:read', () => clipboard.readText());
 ipcMain.handle('clipboard:write', (_e, text) => clipboard.writeText(String(text ?? '')));
 
-ipcMain.handle('stt:transcribe', async (_e, { bytes, mimeType, filename }) => {
+/**
+ * Transcribe un audio. Camino unico para el microfono, el boton "Probar" y el
+ * diagnostico `--stt-check`, para que los tres ejerzan exactamente lo mismo.
+ */
+async function transcribeAudio({ bytes, mimeType, filename }, notify = () => {}) {
   const stt = getSettings().stt;
-  if (!stt.apiKey) {
+  const isLocal = endpointIsLocal(stt.endpoint);
+
+  // Con servidor local no hace falta credencial; con uno remoto, si.
+  if (!stt.apiKey && !isLocal) {
     return { ok: false, code: 'NO_KEY', error: 'Falta la API key de transcripcion en Ajustes.' };
   }
+
+  if (isLocal) {
+    const ready = await ensureLocalServer(stt.endpoint, notify);
+    if (!ready.ok) return { ok: false, code: 'LOCAL_SERVER', error: ready.error };
+  }
+
   try {
     const form = new FormData();
     form.append('file', new Blob([bytes], { type: mimeType || 'audio/webm' }), filename || 'audio.webm');
@@ -904,8 +1209,10 @@ ipcMain.handle('stt:transcribe', async (_e, { bytes, mimeType, filename }) => {
 
     const res = await fetch(stt.endpoint, {
       method: 'POST',
-      headers: { Authorization: `Bearer ${stt.apiKey}` },
+      headers: stt.apiKey ? { Authorization: `Bearer ${stt.apiKey}` } : {},
       body: form,
+      // Un audio largo en CPU puede tardar; sin tope, un cuelgue seria eterno.
+      signal: AbortSignal.timeout(180000),
     });
 
     const raw = await res.text();
@@ -930,4 +1237,10 @@ ipcMain.handle('stt:transcribe', async (_e, { bytes, mimeType, filename }) => {
   } catch (err) {
     return { ok: false, error: err.message };
   }
-});
+}
+
+ipcMain.handle('stt:transcribe', (_e, payload) =>
+  transcribeAudio(payload, (message) => {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('stt:status', message);
+  })
+);

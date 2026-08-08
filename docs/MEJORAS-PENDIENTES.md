@@ -87,11 +87,27 @@ tecla. Solo tendría sentido con disparo explícito tipo `Ctrl+Espacio`.
 
 ---
 
-## 2. Transcripción local sin depender de la nube
+## 2. Transcripción local sin depender de la nube — ✅ IMPLEMENTADO
 
-**Estado:** pendiente. La app **no detecta** instalaciones locales de Whisper.
+**Estado:** hecho. Ver `tools/whisper-server/` y la sección "Dictado local" del README.
 
-Hoy el micrófono solo sabe hacer POST de audio a un endpoint HTTP con API
+Se eligió la opción 1 de las de abajo: un servidor mínimo que envuelve
+`faster-whisper` y expone `/v1/audio/transcriptions`. AdminTerm lo arranca solo al
+dictar y lo cierra al salir. Modelo por defecto `small`; medido en un i7-8550U con
+el servidor caliente y 4,8 s de audio: `base` 1,7 s, `small` 4,9 s.
+
+De paso se corrigió un fallo que lo habría bloqueado todo: `main.js` exigía API key
+**siempre**, aunque el renderer ya eximía a localhost. Y la comprobación de "endpoint
+local" pasó a parsear la URL en vez de comparar cadenas, porque
+`https://127.0.0.1.ejemplo.com/` empieza por `127.0.0.1` y **no** es local: darla
+por local habría enviado audio a un tercero sin exigir credencial.
+
+<details>
+<summary>Análisis original (2026-08-07)</summary>
+
+La app no detectaba instalaciones locales de Whisper.
+
+El micrófono solo sabía hacer POST de audio a un endpoint HTTP con API
 compatible con OpenAI. No escanea el equipo, no lanza procesos y no pide
 instalar nada. El preset "Servidor local" apunta a
 `http://127.0.0.1:8000/v1/audio/transcriptions`, dando por hecho que **ya tienes
@@ -125,6 +141,14 @@ así que no hay nada con lo que AdminTerm pueda hablar por HTTP tal cual está.
 
 Recomendado: la 1, y opcionalmente que la app incluya el script y un botón para
 levantarlo.
+
+</details>
+
+### Queda pendiente de esta línea
+
+- **Detectar Python y las dependencias al abrir Ajustes** y avisar antes de que
+  falle el primer dictado, en vez de reportar el error al pulsar el micrófono.
+- **Modo "comando local"** para usar `whisper.cpp` u otro CLI sin servidor HTTP.
 
 ---
 

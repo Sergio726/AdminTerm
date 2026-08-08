@@ -52,15 +52,41 @@ configurables; detecta qué fuentes monoespaciadas tienes realmente instaladas
 opción para forzar contraste mínimo AA sobre los colores ANSI que emitan las CLI.
 
 **Micrófono.** El botón 🎤 graba localmente y envía el audio al endpoint de
-transcripción que configures en Ajustes; el texto se escribe en el terminal
+transcripción que configures en Ajustes; el texto se escribe en el panel activo
 (opcionalmente con Enter automático). Funciona con cualquier endpoint compatible
 con la API de OpenAI:
 
 | Proveedor | Endpoint | Modelo |
 | --- | --- | --- |
+| **Servidor local** | `http://127.0.0.1:8756/v1/audio/transcriptions` | `small` o `base` |
 | OpenAI | `https://api.openai.com/v1/audio/transcriptions` | `whisper-1` o `gpt-4o-mini-transcribe` |
 | Groq | `https://api.groq.com/openai/v1/audio/transcriptions` | `whisper-large-v3-turbo` |
-| Local | `http://127.0.0.1:8000/v1/audio/transcriptions` | el de tu servidor Whisper |
+
+### Dictado local, sin conexión y sin API key
+
+Con el proveedor **Servidor local**, AdminTerm levanta Whisper en tu propio equipo
+la primera vez que dictas y lo cierra al salir. No hace falta API key, no sale
+audio de la máquina y no cuesta nada.
+
+Requiere Python con `faster-whisper`, `fastapi`, `uvicorn` y `python-multipart`:
+
+```bash
+pip install faster-whisper fastapi uvicorn python-multipart
+```
+
+El servidor vive en [`tools/whisper-server/`](tools/whisper-server/) y también se
+puede lanzar a mano con `start.bat` para depurar.
+
+Elegir modelo en Ajustes → Micrófono → Modelo. Medido sobre un i7-8550U (portátil
+de 2017, sin GPU) con 4,8 s de audio y el servidor ya caliente:
+
+| Modelo | Latencia | Tamaño |
+| --- | --- | --- |
+| `base` | **1,7 s** | 141 MB |
+| `small` | 4,9 s | 464 MB |
+
+`base` es unas 3 veces más rápido; `small` acierta más con nombres propios y
+jerga técnica. En una máquina moderna ambos van bastante más rápido.
 
 **Archivos.** Botón 📁 (o `Ctrl+Shift+O`) para elegir varios archivos e insertar sus
 rutas absolutas entrecomilladas en el prompt — que es justo lo que Claude Code y

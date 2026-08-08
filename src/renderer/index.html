@@ -238,6 +238,21 @@
             <input id="set-stt-autoSend" type="checkbox" />
             <span>Enviar automaticamente (Enter) tras transcribir</span>
           </label>
+          <label class="row check">
+            <input id="set-stt-autoStartLocal" type="checkbox" />
+            <span>Arrancar el servidor local automaticamente al dictar</span>
+          </label>
+          <label class="row">
+            <span>Ruta de Python</span>
+            <input id="set-stt-pythonPath" type="text" spellcheck="false" placeholder="(autodetectar)" />
+          </label>
+          <p class="hint">
+            Con el proveedor <strong>Servidor local</strong> no hace falta API key: AdminTerm
+            levanta Whisper en tu equipo la primera vez que dictas y lo cierra al salir.
+            Requiere Python con <code>faster-whisper</code>, <code>fastapi</code> y
+            <code>uvicorn</code>. El campo "Modelo" acepta <code>base</code> (mas rapido)
+            o <code>small</code> (mas preciso).
+          </p>
           <p class="hint">
             "Probar" envia un audio de un segundo generado al vuelo para comprobar
             endpoint y credenciales, sin usar el microfono.
