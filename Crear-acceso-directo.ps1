@@ -6,11 +6,18 @@ $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $icon = Join-Path $root 'build\icon.ico'
 
-# Se prefiere la app compilada (arranca mas rapido y no depende de Node).
-$packaged = Join-Path $root 'dist\win-unpacked\AdminTerm.exe'
+# Se prefiere la app compilada (arranca mas rapido y no depende de Node). Si hay
+# varias carpetas de salida se toma la MAS RECIENTE: una compilacion antigua
+# puede quedar bloqueada por un proceso vivo y obligar a construir en otra.
+$packaged = @('dist', 'dist2') |
+    ForEach-Object { Join-Path $root "$_\win-unpacked\AdminTerm.exe" } |
+    Where-Object { Test-Path $_ } |
+    Sort-Object { (Get-Item $_).LastWriteTime } -Descending |
+    Select-Object -First 1
+
 $dev = Join-Path $root 'node_modules\electron\dist\electron.exe'
 
-if (Test-Path $packaged) {
+if ($packaged) {
     $exe = $packaged
     $arguments = ''
 } elseif (Test-Path $dev) {
