@@ -166,7 +166,11 @@ let uacDenied = false;
 
 if (IS_WIN && !elevated && !process.argv.includes('--no-elevate') && getSettings().autoElevate) {
   if (relaunchElevated()) {
-    app.exit(0);
+    // process.exit y no app.exit: el apagado de Electron se bloquea en esta
+    // app (ya paso con el cierre de ventana), y aqui dejaba vivo el proceso
+    // lanzador con sus hijos en CADA arranque desde el acceso directo. No hay
+    // nada que vaciar: esto ocurre antes de whenReady.
+    process.exit(0);
   } else {
     uacDenied = true;
   }
@@ -1166,7 +1170,13 @@ ipcMain.handle('sys:winH', () => {
 
 ipcMain.handle('sys:relaunchElevated', () => {
   if (relaunchElevated()) {
-    setTimeout(() => app.exit(0), 400);
+    // Mismo motivo que arriba: app.exit() se queda colgado y dejaria este
+    // proceso vivo junto al recien elevado.
+    setTimeout(() => {
+      killAllSessions();
+      stopLocalServer();
+      process.exit(0);
+    }, 400);
     return { ok: true };
   }
   return { ok: false, error: 'UAC cancelado o bloqueado por politica del sistema.' };
