@@ -31,7 +31,7 @@ y genera el icono.
 | Generar un `.exe` distribuible | `npm run build` (portable) o `npm run dist` (instalador) |
 
 `npm run build` deja un ejecutable autocontenido en
-`dist\AdminTerm-portable-1.0.0.exe` (~86 MB) que funciona en cualquier Windows
+`dist\AdminTerm-portable-1.1.0.exe` (~86 MB) que funciona en cualquier Windows
 x64 sin Node ni instalación.
 
 Al abrir, AdminTerm se relanza a sí misma pidiendo UAC. Si cancelas el aviso, la
