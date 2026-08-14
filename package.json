@@ -1,7 +1,7 @@
 {
   "name": "adminterm",
   "productName": "AdminTerm",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Terminal de escritorio ultraligera con privilegios de administrador, dictado por microfono y carga de archivos. Pensada para usar Claude Code y Codex.",
   "main": "src/main.js",
   "author": "Sebastian",
