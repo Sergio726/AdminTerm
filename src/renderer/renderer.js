@@ -71,6 +71,7 @@ const els = {
   dropOverlay: $('drop-overlay'), micOverlay: $('mic-overlay'), micTimer: $('mic-timer'),
   btnMic: $('btn-mic'), modal: $('settings-modal'), toast: $('toast'),
   searchBar: $('search-bar'), searchInput: $('search-input'),
+  helpModal: $('help-modal'),
 };
 
 /** El panel que recibe teclado, archivos y dictado. */
@@ -187,8 +188,17 @@ function renderTabs() {
   els.tabs.textContent = '';
   for (const tab of tabs) {
     const el = document.createElement('div');
-    el.className = 'tab' + (tab === activeTab ? ' active' : '') + (tab.dead ? ' dead' : '');
+    el.className = 'tab' + (tab === activeTab ? ' active' : '') + (tab.dead ? ' dead' : '') +
+      (tab.waiting ? ' waiting' : '');
     el.setAttribute('role', 'tab');
+
+    if (tab.waiting) {
+      const dot = document.createElement('span');
+      dot.className = 'tab-dot';
+      dot.textContent = '●';
+      dot.title = 'Esta pestana espera que confirmes algo';
+      el.appendChild(dot);
+    }
 
     const title = document.createElement('span');
     title.className = 'tab-title';
@@ -346,6 +356,7 @@ function createTab() {
     get id() { return this.activePane ? this.activePane.id : null; },
     get title() { return this.activePane ? this.activePane.title : ''; },
     get dead() { return this.panes.length > 0 && this.panes.every((p) => p.dead); },
+    get waiting() { return this.panes.some((p) => p.waiting); },
   };
 }
 
@@ -402,7 +413,10 @@ async function createPane(tab, shellKey) {
   };
   tab.panes.push(pane);
 
-  term.onData((data) => api.ptyInput(pane.id, data));
+  term.onData((data) => {
+    api.ptyInput(pane.id, data);
+    setPaneWaiting(pane, false); // si estas contestando, el aviso sobra
+  });
   term.onTitleChange((t) => {
     const next = prettyTitle(t, res.label);
     if (next !== pane.title) {
@@ -515,6 +529,7 @@ function movePaneFocus(key) {
 
 function activateTab(tab) {
   activeTab = tab;
+  clearTabWaiting(tab); // abrirla ya es haberla visto
   for (const t of tabs) {
     t.view.classList.toggle('active', t === tab);
   }
@@ -600,9 +615,92 @@ api.onSttStatus((message) => {
   els.statusMsg.textContent = message;
 });
 
+// ---------------------------------------------------------------------------
+// Aviso de "esta pestana espera que confirmes algo"
+// ---------------------------------------------------------------------------
+
+/**
+ * Las CLI de agentes (Claude Code, Codex...) se paran a pedir permiso de unas
+ * pocas formas muy reconocibles. Se buscan sobre el texto ya pintado en
+ * pantalla, no sobre el flujo del PTY: asi da igual como llegue troceado y
+ * cuantas veces la TUI redibuje su cuadro.
+ */
+const WAITING_PATTERNS = [
+  /^\s*[>❯›*]?\s*1[.)]\s*(?:yes|s[ií])\b/im,
+  /\b(?:do you want|would you like|do you approve|shall i)\b[^\n]{0,90}\?/i,
+  /\b(?:quieres|deseas|confirmas|continuamos)\b[^\n]{0,90}\?/i,
+  /\[\s*(?:y\/n|yes\/no|s\/n)\s*\]/i,
+  /\(\s*(?:y\/n|yes\/no|s\/n)\s*\)/i,
+  /\b(?:allow|approve|permitir|aprobar|autorizar)\b[^\n]{0,70}\?/i,
+  /\b(?:press|pulsa)\s+(?:enter|intro)\b[^\n]{0,50}\b(?:continue|continuar|confirm|confirmar)\b/i,
+  /\bwaiting for (?:your )?(?:confirmation|approval|response|input)\b/i,
+  /\besperando (?:tu )?(?:confirmaci[oó]n|respuesta|aprobaci[oó]n)\b/i,
+];
+
+function waitingFromText(text) {
+  return WAITING_PATTERNS.some((re) => re.test(text));
+}
+
+/** Las ultimas filas con texto del panel, ya sin secuencias de escape. */
+function paneTailText(pane, rows = 16) {
+  const buffer = pane.term.buffer.active;
+  const textAt = (y) => {
+    const line = buffer.getLine(y);
+    return line ? line.translateToString(true) : '';
+  };
+
+  // Media pantalla en blanco es lo normal cuando la sesion acaba de empezar:
+  // se busca la ultima fila escrita, no la ultima fila de la ventana.
+  let end = buffer.baseY + pane.term.rows - 1;
+  while (end > buffer.baseY && !textAt(end).trim()) end--;
+
+  const lines = [];
+  for (let y = Math.max(0, end - rows + 1); y <= end; y++) lines.push(textAt(y));
+  return lines.join('\n');
+}
+
+function setPaneWaiting(pane, waiting) {
+  if (!!pane.waiting === waiting) return;
+  pane.waiting = waiting;
+  renderTabs();
+}
+
+function checkWaiting(pane) {
+  if (!settings || !settings.notifyWaiting || pane.dead) return setPaneWaiting(pane, false);
+  // Si lo tienes delante no hay nada que avisar.
+  const visible = pane.tab === activeTab && pane === pane.tab.activePane && document.hasFocus();
+  setPaneWaiting(pane, !visible && waitingFromText(paneTailText(pane)));
+}
+
+/** Una TUI redibuja su cuadro en varias escrituras: se mira cuando se calma. */
+function scheduleWaitingCheck(pane) {
+  clearTimeout(pane.waitingTimer);
+  pane.waitingTimer = setTimeout(() => checkWaiting(pane), 220);
+}
+
+function clearTabWaiting(tab) {
+  let changed = false;
+  for (const pane of tab.panes) {
+    if (pane.waiting) {
+      pane.waiting = false;
+      changed = true;
+    }
+  }
+  return changed;
+}
+
+// Volver a la ventana cuenta como haber visto la pestana que estabas mirando;
+// salir de ella obliga a revisar todos los paneles, que ya nadie vigila.
+window.addEventListener('focus', () => {
+  if (activeTab && clearTabWaiting(activeTab)) renderTabs();
+});
+window.addEventListener('blur', () => {
+  for (const pane of allPanes()) checkWaiting(pane);
+});
+
 api.onPtyData(({ id, data }) => {
   const pane = paneById(id);
-  if (pane) pane.term.write(data);
+  if (pane) pane.term.write(data, () => scheduleWaitingCheck(pane));
 });
 
 api.onPtyExit(({ id, exitCode }) => {
@@ -668,11 +766,56 @@ async function restoreSession(saved) {
 // Portapapeles y archivos
 // ---------------------------------------------------------------------------
 
-async function pasteIntoPane(pane) {
-  const text = await api.readClipboard();
-  if (!text) return;
-  api.ptyInput(pane.id, text.replace(/\r\n/g, '\r').replace(/\n/g, '\r'));
+const ESC = String.fromCharCode(27);
+
+/**
+ * Lo que hay que mandarle al PTY para pegar `text`.
+ *
+ * El PTY espera CR como fin de linea: un LF suelto no ejecuta el comando. Y si
+ * la aplicacion de dentro pidio "bracketed paste" (Claude Code, Codex, vim...),
+ * el texto va marcado como pegado; sin esas marcas, un texto de varias lineas
+ * se ejecutaria linea a linea segun entra.
+ */
+function pasteData(pane, text) {
+  const data = String(text).replace(/\r\n/g, '\r').replace(/\n/g, '\r');
+  const bracketed = pane.term.modes && pane.term.modes.bracketedPasteMode;
+  return bracketed ? `${ESC}[200~${data}${ESC}[201~` : data;
 }
+
+/** Un pegado solo puede entrar por aqui. */
+function writePaste(pane, text) {
+  if (!pane || !text) return;
+  api.ptyInput(pane.id, pasteData(pane, text));
+}
+
+/**
+ * Cuando pegamos nosotros, Chromium todavia puede emitir su propio evento
+ * `paste` por la misma pulsacion. Esa ventana marca ese evento como ya
+ * atendido para que no se pegue por partida doble.
+ */
+let pasteHandledUntil = 0;
+
+async function pasteIntoPane(pane) {
+  pasteHandledUntil = performance.now() + 200;
+  writePaste(pane, await api.readClipboard());
+}
+
+/**
+ * Evento `paste` del navegador (menu contextual del sistema, o cualquier via
+ * que no pase por nuestros atajos). Se atiende en captura y se detiene ahi:
+ * si llegara a xterm, xterm lo escribiria por su cuenta y el texto entraria
+ * dos veces.
+ */
+document.addEventListener(
+  'paste',
+  (e) => {
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    if (performance.now() < pasteHandledUntil) return;
+    writePaste(activePane(), e.clipboardData ? e.clipboardData.getData('text') : '');
+  },
+  true
+);
 
 function insertPaths(paths) {
   const pane = activePane();
@@ -945,6 +1088,9 @@ function runSearch(back = false) {
 function isAppShortcut(e) {
   const k = e.key.toLowerCase();
 
+  // Ayuda: F1 a secas, como en el resto de Windows.
+  if (k === 'f1' && !e.ctrlKey && !e.altKey && !e.shiftKey) return true;
+
   // Division de paneles y movimiento del foco: familia Alt.
   if (e.altKey && !e.ctrlKey) {
     if (e.shiftKey && ['+', '-', '=', '_'].includes(k)) return true;
@@ -953,7 +1099,11 @@ function isAppShortcut(e) {
   }
 
   if (!e.ctrlKey || e.altKey) return false;
-  if (e.shiftKey && ['t', 'w', 'c', 'v', 'f', 'm', 'o', 'tab'].includes(k)) return true;
+  if (e.shiftKey && ['t', 'w', 'c', 'v', 'f', 'm', 'o', 'h', 'tab'].includes(k)) return true;
+  // Ctrl+V lo atiende AdminTerm. Si se dejara pasar, xterm mandaria ademas
+  // \x16 a la shell y PSReadLine (que tiene Ctrl+V = Pegar) pegaria por su
+  // cuenta: el texto entraba dos veces.
+  if (!e.shiftKey && k === 'v') return true;
   if (!e.shiftKey && (k === 'tab' || k === ',' || k === '+' || k === '-' || k === '=' || k === '0')) return true;
   if (!e.shiftKey && /^[1-9]$/.test(k)) return true;
   return false;
@@ -963,6 +1113,7 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
     if (mic.recorder) return stopMic(false);
     if (!els.searchBar.hidden) return closeSearch();
+    if (!els.helpModal.hidden) return closeHelp();
     if (!els.modal.hidden) return closeSettings();
     if (!els.toast.hidden) return hideToast();
     return;
@@ -977,6 +1128,8 @@ document.addEventListener('keydown', (e) => {
   if (!isAppShortcut(e)) return;
   const k = e.key.toLowerCase();
   e.preventDefault();
+
+  if (k === 'f1') return toggleHelp();
 
   if (e.altKey) {
     if (e.shiftKey) {
@@ -1008,11 +1161,17 @@ document.addEventListener('keydown', (e) => {
       case 'f': openSearch(); return;
       case 'm': mic.recorder ? stopMic(false) : startMic(); return;
       case 'o': pickFiles(); return;
+      case 'h': toggleHelp(); return;
       case 'tab': cycleTab(-1); return;
     }
     return;
   }
 
+  if (k === 'v') {
+    const pane = activePane();
+    if (pane) pasteIntoPane(pane);
+    return;
+  }
   if (k === 'tab') return cycleTab(1);
   if (k === ',') return openSettings();
   if (k === '+' || k === '=') return setFontSize(settings.fontSize + 1);
@@ -1041,6 +1200,125 @@ els.terminals.addEventListener(
 );
 
 // ---------------------------------------------------------------------------
+// Ayuda
+// ---------------------------------------------------------------------------
+
+/**
+ * Como preguntarle a cada shell que sabe hacer. AdminTerm no inventa comandos
+ * propios: la lista de lo ejecutable la da siempre la shell.
+ */
+const POWERSHELL_HELP = {
+  label: 'PowerShell',
+  items: [
+    ['Get-Command', 'Todos los comandos disponibles. Son miles: conviene filtrar.'],
+    ['Get-Command *serv*', 'Busca comandos por nombre (aqui, los que contienen "serv").'],
+    ['Get-Command -Verb Get', 'Comandos por verbo: Get, Set, New, Remove...'],
+    ['help', 'Introduccion al sistema de ayuda.'],
+    ['Get-Help ls -Examples', 'Ejemplos de uso de un comando concreto.'],
+    ['Get-Help ls -Online', 'Abre la documentacion completa en el navegador.'],
+    ['Get-Alias', 'Atajos ya definidos: ls, dir, cat, cd...'],
+    ['Get-History', 'Los comandos que has escrito en esta sesion.'],
+  ],
+  tip: 'Escribe las primeras letras y pulsa Tab para completar, o Ctrl+Espacio para ver todas las opciones.',
+};
+
+const BASH_HELP = {
+  label: 'Bash',
+  items: [
+    ['compgen -c | sort -u | less', 'Todos los comandos que la shell puede ejecutar.'],
+    ['help', 'Comandos internos de bash (cd, export, alias...).'],
+    ['man ls', 'Manual completo de un comando.'],
+    ['ls --help', 'Resumen rapido de las opciones de un comando.'],
+    ['type -a git', 'Que es un nombre: programa, alias o funcion, y donde vive.'],
+    ['alias', 'Atajos definidos en tu configuracion.'],
+    ['history', 'Los comandos que has escrito.'],
+  ],
+  tip: 'Pulsa Tab dos veces con la linea vacia para que bash liste todo lo ejecutable.',
+};
+
+const SHELL_HELP = {
+  powershell: POWERSHELL_HELP,
+  pwsh: POWERSHELL_HELP,
+  gitbash: BASH_HELP,
+  wsl: BASH_HELP,
+  cmd: {
+    label: 'Simbolo del sistema',
+    items: [
+      ['help', 'Lista los comandos internos de cmd con una linea de descripcion.'],
+      ['help dir', 'Ayuda detallada de un comando concreto.'],
+      ['dir /?', 'Lo mismo, con la sintaxis que acepta casi cualquier programa.'],
+      ['where ping', 'Donde esta el ejecutable de un comando.'],
+      ['doskey /history', 'Los comandos que has escrito.'],
+    ],
+    tip: 'cmd no autocompleta comandos, solo rutas: pulsa Tab sobre un nombre de archivo.',
+  },
+};
+
+/** Escribe un comando en el panel activo sin ejecutarlo. */
+function insertCommand(text) {
+  const pane = activePane();
+  if (!pane) return;
+  api.ptyInput(pane.id, text);
+  pane.term.focus();
+}
+
+function fillHelpCommands() {
+  const pane = activePane();
+  const help = SHELL_HELP[pane ? pane.shellKey : settings.shell] || POWERSHELL_HELP;
+  const host = $('help-commands');
+  host.textContent = '';
+
+  const head = document.createElement('p');
+  head.className = 'hint';
+  head.textContent = `Shell del panel activo: ${help.label}.`;
+  host.appendChild(head);
+
+  const list = document.createElement('div');
+  list.className = 'cmd-list';
+  for (const [command, description] of help.items) {
+    const row = document.createElement('button');
+    row.className = 'cmd-row';
+    row.type = 'button';
+    row.title = 'Escribir en el panel activo';
+
+    const code = document.createElement('code');
+    code.textContent = command;
+    const desc = document.createElement('span');
+    desc.textContent = description;
+
+    row.append(code, desc);
+    row.addEventListener('click', () => {
+      closeHelp();
+      insertCommand(command);
+      flashStatus('Comando escrito: pulsa Enter para ejecutarlo', 2500);
+    });
+    list.appendChild(row);
+  }
+  host.appendChild(list);
+
+  const tip = document.createElement('p');
+  tip.className = 'hint';
+  tip.textContent = help.tip;
+  host.appendChild(tip);
+}
+
+function openHelp() {
+  fillHelpCommands();
+  els.helpModal.hidden = false;
+}
+
+function closeHelp() {
+  els.helpModal.hidden = true;
+  const pane = activePane();
+  if (pane) pane.term.focus();
+}
+
+function toggleHelp() {
+  if (els.helpModal.hidden) openHelp();
+  else closeHelp();
+}
+
+// ---------------------------------------------------------------------------
 // Ajustes
 // ---------------------------------------------------------------------------
 
@@ -1057,6 +1335,7 @@ function setFontSize(size) {
 
 function applySettings() {
   document.documentElement.setAttribute('data-ui', settings.theme === 'claro' ? 'claro' : 'oscuro');
+  if (!settings.notifyWaiting) for (const tab of tabs) clearTabWaiting(tab);
   const opts = termOptions();
   for (const pane of allPanes()) {
     for (const [key, value] of Object.entries(opts)) {
@@ -1129,6 +1408,7 @@ function fillSettingsForm() {
   $('set-scrollback').value = settings.scrollback;
   $('set-autoElevate').checked = !!settings.autoElevate;
   $('set-confirmClose').checked = !!settings.confirmClose;
+  $('set-notifyWaiting').checked = !!settings.notifyWaiting;
   $('set-restoreSession').checked = !!settings.restoreSession;
   $('set-rememberWindow').checked = !!settings.rememberWindow;
   $('set-globalHotkeyEnabled').checked = !!settings.globalHotkeyEnabled;
@@ -1167,6 +1447,7 @@ function bindSettingsForm() {
     'set-highContrast': 'highContrast',
     'set-autoElevate': 'autoElevate',
     'set-confirmClose': 'confirmClose',
+    'set-notifyWaiting': 'notifyWaiting',
     'set-restoreSession': 'restoreSession',
     'set-rememberWindow': 'rememberWindow',
   };
@@ -1265,6 +1546,10 @@ function bindToolbar() {
   $('btn-split-right').addEventListener('click', () => splitActive('row'));
   $('btn-split-down').addEventListener('click', () => splitActive('column'));
   $('btn-files').addEventListener('click', pickFiles);
+  $('btn-help').addEventListener('click', toggleHelp);
+  $('help-close').addEventListener('click', closeHelp);
+  $('help-done').addEventListener('click', closeHelp);
+  els.helpModal.querySelector('.modal-backdrop').addEventListener('click', closeHelp);
   $('btn-settings').addEventListener('click', openSettings);
   $('btn-font-plus').addEventListener('click', () => setFontSize(settings.fontSize + 1));
   $('btn-font-minus').addEventListener('click', () => setFontSize(settings.fontSize - 1));
@@ -1331,6 +1616,7 @@ async function boot() {
 window.__adminTerm = {
   tabs,
   newTab,
+  activateTab,
   splitActive,
   destroyTab,
   destroyPane,
@@ -1340,6 +1626,11 @@ window.__adminTerm = {
   insertPaths,
   openSettings,
   closeSettings,
+  openHelp,
+  closeHelp,
+  pasteData,
+  waitingFromText,
+  checkWaiting,
   setFontSize,
   layoutSnapshot,
   restoreSession,
