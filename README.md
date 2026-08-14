@@ -99,6 +99,17 @@ arrastra el divisor para repartir el espacio y muévete entre paneles con
 el otro. Los paneles anidados (dividir un panel ya dividido en el otro eje) no
 están soportados; para eso, abre otra pestaña.
 
+**Avisa cuando un agente te espera.** Si Claude Code, Codex u otra CLI se queda
+pidiendo confirmación en una pestaña que no estás mirando, esa pestaña se tiñe y
+parpadea hasta que la abres. Se reconoce por lo que hay en pantalla (`1. Yes`,
+`[y/N]`, `Do you want to...?`, `¿Deseas continuar?` y formas parecidas), así que
+funciona con cualquier CLI sin integrarse con ninguna. Se desactiva en Ajustes →
+Terminal.
+
+**Ayuda a mano.** `F1` abre una hoja con todos los atajos y, según la shell del
+panel activo, los comandos que listan lo que puedes ejecutar (`Get-Command`,
+`help`, `compgen -c`...). Al pulsar uno se escribe en el terminal sin ejecutarlo.
+
 **Reabre donde lo dejaste.** Al cerrar guarda qué pestañas y paneles tenías, con
 sus proporciones, y los reconstruye al abrir. También recuerda el tamaño y la
 posición de la ventana.
@@ -115,18 +126,24 @@ aplican en vivo a todos los paneles abiertos.
 
 | Atajo | Acción |
 | --- | --- |
+| `F1` | Ayuda: atajos y comandos de la shell (también `Ctrl+Shift+H`) |
 | `Ctrl+Shift+T` | Nueva pestaña |
 | `Alt+Shift++` / `Alt+Shift+-` | Dividir a la derecha / abajo |
 | `Alt`+flechas | Moverse entre paneles |
 | `Ctrl+Shift+W` | Cerrar el panel activo (o la pestaña si es el último) |
 | `Ctrl+Tab` / `Ctrl+1..9` | Cambiar de pestaña |
-| `Ctrl+Shift+C` / `Ctrl+Shift+V` | Copiar / pegar (`Ctrl+C` queda libre para las CLI) |
+| `Ctrl+Shift+C` | Copiar (`Ctrl+C` queda libre para las CLI) |
+| `Ctrl+V` / `Ctrl+Shift+V` | Pegar |
 | `Ctrl+Shift+F` | Buscar |
 | `Ctrl+Shift+M` | Micrófono |
 | `Ctrl+Shift+O` | Insertar rutas de archivos |
 | `Ctrl` `+` / `-` / `0` | Tamaño de fuente |
 | `Ctrl+,` | Ajustes |
 | Clic derecho | Copia la selección, o pega si no hay selección |
+
+`Ctrl+V` lo atiende AdminTerm y no llega a lo que corras dentro. Es a propósito:
+si se dejara pasar, PSReadLine (que también tiene `Ctrl+V` = pegar) pegaría por
+su cuenta y el texto entraría dos veces.
 
 ---
 

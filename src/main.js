@@ -37,6 +37,7 @@ const DEFAULTS = {
   scrollback: 20000,
   highContrast: true,
   confirmClose: true,
+  notifyWaiting: true,
   restoreSession: true,
   rememberWindow: true,
   globalHotkeyEnabled: false,
@@ -819,7 +820,7 @@ const SELFTEST_SCRIPT = String.raw`
   add('aviso se auto-oculta', !shown('toast'), 'el toast desaparece solo');
 
   // ...y en reposo no debe quedar ninguna capa superpuesta encima del terminal.
-  const overlays = ['drop-overlay', 'mic-overlay', 'search-bar', 'toast', 'settings-modal'].filter(shown);
+  const overlays = ['drop-overlay', 'mic-overlay', 'search-bar', 'toast', 'settings-modal', 'help-modal'].filter(shown);
   add('capas en reposo', overlays.length === 0, overlays.length ? 'visibles por error: ' + overlays.join(', ') : 'todas ocultas');
 
   // --- portapapeles (copiar/pegar), preservando lo que tuviera el usuario ---
@@ -845,6 +846,89 @@ const SELFTEST_SCRIPT = String.raw`
     add('local sin API key', !!localRes && localRes.code !== 'NO_KEY',
       'devuelve ' + ((localRes && (localRes.code || (localRes.ok ? 'ok' : 'error'))) || 'nada') + ', no NO_KEY');
   }
+
+  // --- pegar: el texto debe entrar UNA vez ---
+  // Regresion real: xterm escribia el paste del navegador y ademas mandaba
+  // \x16 a la shell, que PSReadLine interpreta como "pegar". Salia dos veces.
+  const pasteTab = app.activeTab;
+  window.adminterm.ptyInput(pasteTab.id, String.fromCharCode(3));
+  await sleep(400);
+  const pasteProbe = 'ADMINTERM_PASTE_PROBE';
+  const dt = new DataTransfer();
+  dt.setData('text/plain', pasteProbe);
+  const pasteTarget = app.activePane.el.querySelector('textarea') || app.activePane.el;
+  pasteTarget.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
+
+  const pasteDeadline = Date.now() + 12000;
+  let pasteHits = 0;
+  while (Date.now() < pasteDeadline && pasteHits < 1) {
+    await sleep(200);
+    pasteHits = (bufferOf(pasteTab).match(new RegExp(pasteProbe, 'g')) || []).length;
+  }
+  await sleep(700); // margen por si un segundo pegado llegara tarde
+  pasteHits = (bufferOf(pasteTab).match(new RegExp(pasteProbe, 'g')) || []).length;
+  add('pegar una sola vez', pasteHits === 1, 'el texto pegado aparece ' + pasteHits + ' vez/veces');
+  window.adminterm.ptyInput(pasteTab.id, String.fromCharCode(3));
+
+  // Con "bracketed paste" activo (Claude Code, Codex, vim...) el texto debe ir
+  // marcado, o un pegado de varias lineas se ejecuta linea a linea.
+  const esc = String.fromCharCode(27);
+  const multiline = 'uno' + String.fromCharCode(13, 10) + 'dos';
+  const plainPaste = app.pasteData(app.activePane, multiline);
+  app.activePane.term.write(esc + '[?2004h');
+  await sleep(200);
+  const bracketedPaste = app.pasteData(app.activePane, multiline);
+  app.activePane.term.write(esc + '[?2004l');
+  await sleep(200);
+  const bracketOk =
+    plainPaste === 'uno' + String.fromCharCode(13) + 'dos' &&
+    bracketedPaste === esc + '[200~' + plainPaste + esc + '[201~';
+  add('pegado multilinea marcado', bracketOk,
+    bracketOk ? 'CR como salto y marcas 200~/201~ cuando la CLI las pide' : 'las marcas no se aplican');
+
+  // --- ayuda (F1): abre, lista comandos de la shell y cierra ---
+  app.openHelp();
+  const helpRows = document.querySelectorAll('#help-commands .cmd-row').length;
+  const helpOpen = shown('help-modal') && helpRows > 0;
+  app.closeHelp();
+  add('panel de ayuda', helpOpen && !shown('help-modal'), 'abre con ' + helpRows + ' comandos de shell y cierra');
+
+  // --- deteccion de "esperando confirmacion" ---
+  const waitingYes = [
+    'Do you want to proceed?',
+    '> 1. Yes',
+    'Continue? [y/N]',
+    'Allow Codex to run this command?',
+    'Deseas continuar con el borrado?',
+  ].every((s) => app.waitingFromText(s));
+  const waitingNo = [
+    'npm install completado sin errores',
+    'error: no such file or directory',
+    '1. Introduccion al proyecto',
+    'Listo. Se actualizaron 3 archivos.',
+  ].every((s) => !app.waitingFromText(s));
+  add('detectar confirmacion pendiente', waitingYes && waitingNo,
+    waitingYes ? (waitingNo ? '5 formas reconocidas, 4 textos normales ignorados' : 'falso positivo en texto normal') : 'no reconoce alguna forma');
+
+  // La pestana que no estas mirando debe encenderse, y apagarse al abrirla.
+  const otherTab = app.tabs.find((t) => t !== app.activeTab);
+  const wasActive = app.activeTab;
+  let tabLit = false;
+  let tabCleared = false;
+  if (otherTab) {
+    otherTab.panes[0].term.write('\r\nDo you want to proceed?\r\n> 1. Yes\r\n');
+    await sleep(300);
+    app.checkWaiting(otherTab.panes[0]);
+    await sleep(150);
+    tabLit = otherTab.waiting && document.querySelectorAll('#tabs .tab.waiting').length === 1;
+    app.activateTab(otherTab);
+    await sleep(200);
+    tabCleared = !otherTab.waiting && document.querySelectorAll('#tabs .tab.waiting').length === 0;
+    app.activateTab(wasActive);
+    await sleep(200);
+  }
+  add('aviso en la pestana', tabLit && tabCleared,
+    tabLit ? (tabCleared ? 'se enciende y se apaga al abrirla' : 'no se apago al abrir la pestana') : 'no se encendio');
 
   // --- cerrar pestana ---
   app.destroyTab(app.tabs[1]);

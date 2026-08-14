@@ -122,6 +122,32 @@ body {
 .tab .tab-close:hover { opacity: 1; background: rgba(255, 107, 107, 0.22); }
 .tab.dead .tab-title { text-decoration: line-through; opacity: 0.6; }
 
+/* Una CLI espera confirmacion en esa pestana: tinte suave y parpadeo lento.
+   Tiene que llamar la atencion de reojo sin competir con el texto del terminal. */
+.tab.waiting {
+  color: var(--fg);
+  border-color: rgba(57, 255, 20, 0.45);
+  animation: tabwaiting 1.5s ease-in-out infinite;
+}
+.tab.waiting .tab-dot { font-size: 8px; line-height: 1; color: var(--accent); }
+@keyframes tabwaiting {
+  0%, 100% { background: rgba(57, 255, 20, 0.09); }
+  50% { background: rgba(57, 255, 20, 0.26); border-color: var(--accent); }
+}
+/* Sobre fondo claro el verde neon se lava: mismo gesto con el verde oscuro. */
+html[data-ui="claro"] .tab.waiting {
+  border-color: rgba(15, 138, 46, 0.5);
+  animation-name: tabwaiting-claro;
+}
+@keyframes tabwaiting-claro {
+  0%, 100% { background: rgba(15, 138, 46, 0.10); }
+  50% { background: rgba(15, 138, 46, 0.26); border-color: var(--accent); }
+}
+/* Quien pide menos movimiento se queda con el tinte fijo, sin parpadeo. */
+@media (prefers-reduced-motion: reduce) {
+  .tab.waiting { animation: none; background: rgba(57, 255, 20, 0.16); }
+}
+
 .icon-btn {
   display: inline-flex;
   align-items: center;
@@ -262,7 +288,7 @@ body.resizing-panes .xterm { pointer-events: none; }
 
 /* ------------------------------------------------------------- overlays */
 
-#drop-overlay, #mic-overlay, #settings-modal {
+#drop-overlay, #mic-overlay, #settings-modal, #help-modal {
   position: fixed;
   inset: 0;
   z-index: 50;
@@ -379,6 +405,32 @@ button.ghost.small { padding: 4px 9px; font-size: 12px; }
   color: var(--fg);
 }
 .shortcuts { margin: 0; padding-left: 18px; color: var(--fg-dim); line-height: 1.8; }
+
+/* Lista de comandos de la shell: cada fila se escribe en el terminal al pulsarla. */
+.cmd-list { display: flex; flex-direction: column; gap: 2px; }
+.cmd-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  color: var(--fg-dim);
+  font: inherit;
+  padding: 5px 7px;
+  cursor: pointer;
+}
+.cmd-row:hover { background: var(--bg-elev); border-color: var(--accent); color: var(--fg); }
+.cmd-row code {
+  flex: 0 0 auto;
+  min-width: 210px;
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 12px;
+  color: var(--accent-2);
+}
+.cmd-row span { font-size: 11.5px; line-height: 1.4; }
 kbd {
   background: var(--bg-elev);
   border: 1px solid var(--border);

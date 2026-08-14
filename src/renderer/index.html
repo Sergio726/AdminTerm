@@ -37,6 +37,8 @@
       <span class="ico">&#127908;</span><span class="lbl">Micro</span>
     </button>
 
+    <button id="btn-help" class="icon-btn" title="Ayuda: atajos y comandos de la shell (F1)" aria-label="Ayuda">?</button>
+
     <button id="btn-settings" class="icon-btn" title="Ajustes (Ctrl+,)" aria-label="Ajustes">&#9881;</button>
   </header>
 
@@ -163,6 +165,14 @@
             <input id="set-confirmClose" type="checkbox" />
             <span>Confirmar antes de cerrar un panel activo</span>
           </label>
+          <label class="row check">
+            <input id="set-notifyWaiting" type="checkbox" />
+            <span>Avisar en la pestana cuando una CLI espera que confirmes algo</span>
+          </label>
+          <p class="hint">
+            Si Claude Code, Codex u otra CLI se queda pidiendo permiso en una pestana
+            que no estas mirando, esa pestana se tine y parpadea hasta que la abras.
+          </p>
         </section>
 
         <section>
@@ -262,12 +272,14 @@
         <section>
           <h3>Atajos</h3>
           <ul class="shortcuts">
+            <li><kbd>F1</kbd> ayuda: atajos y comandos de la shell</li>
             <li><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>T</kbd> nueva pestana</li>
             <li><kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>+</kbd> / <kbd>-</kbd> dividir a la derecha / abajo</li>
             <li><kbd>Alt</kbd>+<kbd>&larr;</kbd><kbd>&rarr;</kbd><kbd>&uarr;</kbd><kbd>&darr;</kbd> moverse entre paneles</li>
             <li><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>W</kbd> cerrar el panel activo</li>
             <li><kbd>Ctrl</kbd>+<kbd>Tab</kbd> / <kbd>Ctrl</kbd>+<kbd>1..9</kbd> cambiar de pestana</li>
-            <li><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>C</kbd> / <kbd>V</kbd> copiar / pegar</li>
+            <li><kbd>Ctrl</kbd>+<kbd>V</kbd> o <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>V</kbd> pegar</li>
+            <li><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>C</kbd> copiar</li>
             <li><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>F</kbd> buscar</li>
             <li><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>M</kbd> microfono</li>
             <li><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>O</kbd> insertar archivos</li>
@@ -281,6 +293,63 @@
         <button id="settings-reset" class="ghost">Restablecer</button>
         <span class="spacer"></span>
         <button id="settings-done" class="primary">Listo</button>
+      </footer>
+    </div>
+  </div>
+
+  <div id="help-modal" hidden>
+    <div class="modal-backdrop" data-close="1"></div>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="help-title">
+      <header class="modal-head">
+        <h2 id="help-title">Ayuda</h2>
+        <button id="help-close" class="icon-btn" aria-label="Cerrar">&times;</button>
+      </header>
+
+      <div class="modal-body">
+        <section>
+          <h3>Ver los comandos de la shell</h3>
+          <p class="hint">
+            Estos son los comandos de la propia shell (no de AdminTerm) que listan
+            lo que puedes ejecutar. Pulsa uno para escribirlo en el panel activo;
+            queda escrito sin ejecutar, para que lo revises antes de pulsar Enter.
+          </p>
+          <div id="help-commands"></div>
+        </section>
+
+        <section>
+          <h3>Atajos de AdminTerm</h3>
+          <ul class="shortcuts">
+            <li><kbd>F1</kbd> esta ayuda (tambien <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>H</kbd>)</li>
+            <li><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>T</kbd> nueva pestana</li>
+            <li><kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>+</kbd> / <kbd>-</kbd> dividir a la derecha / abajo</li>
+            <li><kbd>Alt</kbd>+<kbd>&larr;</kbd><kbd>&rarr;</kbd><kbd>&uarr;</kbd><kbd>&darr;</kbd> moverse entre paneles</li>
+            <li><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>W</kbd> cerrar el panel activo (o la pestana si es el ultimo)</li>
+            <li><kbd>Ctrl</kbd>+<kbd>Tab</kbd> / <kbd>Ctrl</kbd>+<kbd>1..9</kbd> cambiar de pestana</li>
+            <li><kbd>Ctrl</kbd>+<kbd>V</kbd> o <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>V</kbd> pegar</li>
+            <li><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>C</kbd> copiar (<kbd>Ctrl</kbd>+<kbd>C</kbd> queda libre para las CLI)</li>
+            <li><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>F</kbd> buscar en el historial</li>
+            <li><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>M</kbd> dictar por microfono</li>
+            <li><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>O</kbd> insertar rutas de archivos</li>
+            <li><kbd>Ctrl</kbd>+<kbd>+</kbd> / <kbd>-</kbd> / <kbd>0</kbd> tamano de fuente</li>
+            <li><kbd>Ctrl</kbd>+<kbd>,</kbd> ajustes</li>
+            <li>Clic derecho: copia la seleccion, o pega si no hay nada seleccionado</li>
+          </ul>
+        </section>
+
+        <section>
+          <h3>Avisos de las pestanas</h3>
+          <p class="hint">
+            Cuando una CLI (Claude Code, Codex...) se queda esperando que confirmes
+            algo en una pestana que no estas mirando, esa pestana se tine y parpadea.
+            El aviso se apaga solo al abrir la pestana. Se puede desactivar en
+            Ajustes &rarr; Terminal.
+          </p>
+        </section>
+      </div>
+
+      <footer class="modal-foot">
+        <span class="spacer"></span>
+        <button id="help-done" class="primary">Listo</button>
       </footer>
     </div>
   </div>
