@@ -886,6 +886,27 @@ const SELFTEST_SCRIPT = String.raw`
   add('pegado multilinea marcado', bracketOk,
     bracketOk ? 'CR como salto y marcas 200~/201~ cuando la CLI las pide' : 'las marcas no se aplican');
 
+  // El clic derecho sin seleccion tambien pega, y tambien una sola vez.
+  const clipBefore = await window.adminterm.readClipboard();
+  window.adminterm.ptyInput(pasteTab.id, String.fromCharCode(3));
+  await sleep(400);
+  const rightProbe = "ADMINTERM_RCLICK_PROBE";
+  await window.adminterm.writeClipboard(rightProbe);
+  app.activePane.term.clearSelection();
+  app.activePane.el.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2 }));
+
+  const rightDeadline = Date.now() + 12000;
+  let rightHits = 0;
+  while (Date.now() < rightDeadline && rightHits < 1) {
+    await sleep(200);
+    rightHits = (bufferOf(pasteTab).match(new RegExp(rightProbe, "g")) || []).length;
+  }
+  await sleep(700);
+  rightHits = (bufferOf(pasteTab).match(new RegExp(rightProbe, "g")) || []).length;
+  add("clic derecho pega una vez", rightHits === 1, "el texto pegado aparece " + rightHits + " vez/veces");
+  window.adminterm.ptyInput(pasteTab.id, String.fromCharCode(3));
+  await window.adminterm.writeClipboard(clipBefore);
+
   // --- ayuda (F1): abre, lista comandos de la shell y cierra ---
   app.openHelp();
   const helpRows = document.querySelectorAll('#help-commands .cmd-row').length;
@@ -929,6 +950,92 @@ const SELFTEST_SCRIPT = String.raw`
   }
   add('aviso en la pestana', tabLit && tabCleared,
     tabLit ? (tabCleared ? 'se enciende y se apaga al abrirla' : 'no se apago al abrir la pestana') : 'no se encendio');
+
+  // --- la interfaz debe seguir respondiendo aunque la CLI escupa salida ---
+  // Con Codex o Claude trabajando la salida no para, y si el hilo se atasca
+  // no se puede ni cambiar de pestana.
+  const floodTab = app.activeTab;
+  const floodOther = app.tabs.find((t) => t !== floodTab);
+  window.adminterm.ptyInput(floodTab.id,
+    '1..12000 | ForEach-Object { "linea de carga $_ con texto largo para llenar el ancho del terminal" }' + String.fromCharCode(13));
+  await sleep(1500);
+
+  let worstLag = 0;
+  for (let i = 0; i < 12; i++) {
+    const t0 = performance.now();
+    await new Promise((r) => setTimeout(r, 0));
+    worstLag = Math.max(worstLag, performance.now() - t0);
+  }
+  let switchMs = 0;
+  if (floodOther) {
+    const t1 = performance.now();
+    app.activateTab(floodOther);
+    switchMs = performance.now() - t1;
+    app.activateTab(floodTab);
+  }
+  window.adminterm.ptyInput(floodTab.id, String.fromCharCode(3));
+  await sleep(800);
+  add('interfaz responde con salida masiva', worstLag < 500 && switchMs < 500,
+    'peor pausa ' + Math.round(worstLag) + ' ms, cambio de pestana ' + Math.round(switchMs) + ' ms');
+
+  // --- los atajos deben responder aunque la CLI ocupe toda la pantalla ---
+  // Codex y Claude pintan en el buffer alternativo y piden eventos de raton.
+  const tuiTab = app.activeTab;
+  const tuiPane = app.activePane;
+  const esc2 = String.fromCharCode(27);
+  tuiPane.term.write(esc2 + '[?1049h' + esc2 + '[?1000h');
+  await sleep(400);
+  const alternate = tuiPane.term.buffer.active.type === 'alternate';
+  const tuiInput = tuiPane.el.querySelector('textarea');
+  if (tuiInput) tuiInput.focus();
+  const beforeSwitch = app.activeTab;
+  (tuiInput || document).dispatchEvent(new KeyboardEvent('keydown',
+    { key: 'Tab', ctrlKey: true, bubbles: true, cancelable: true }));
+  await sleep(300);
+  const tabChanged = app.activeTab !== beforeSwitch;
+  app.activateTab(tuiTab);
+  tuiPane.term.write(esc2 + '[?1000l' + esc2 + '[?1049l');
+  await sleep(300);
+  add('atajos con una CLI a pantalla completa', alternate && tabChanged,
+    !alternate ? 'no se activo el buffer alternativo'
+      : (tabChanged ? 'Ctrl+Tab cambia de pestana con la TUI activa' : 'Ctrl+Tab NO responde con la TUI activa'));
+
+  // --- cortar lo seleccionado en la linea que se escribe ---
+  const cutTab = app.activeTab;
+  const cutPane = app.activePane;
+  window.adminterm.ptyInput(cutTab.id, String.fromCharCode(3));
+  await sleep(500);
+  window.adminterm.ptyInput(cutTab.id, 'ADMINTERMCUT');
+  await sleep(1500);
+  const cutBuffer = cutPane.term.buffer.active;
+  const cutRow = cutBuffer.baseY + cutBuffer.cursorY;
+  const clipKeep = await window.adminterm.readClipboard();
+  cutPane.term.select(cutBuffer.cursorX - 3, cutRow, 3);
+  const cutPicked = cutPane.term.getSelection();
+  app.cutSelection(cutPane, true);
+  await sleep(1000);
+  const cutLine = cutPane.term.buffer.active.getLine(cutRow).translateToString(true).trim();
+  const cutClip = await window.adminterm.readClipboard();
+  await window.adminterm.writeClipboard(clipKeep);
+  const cutOk = cutPicked === 'CUT' && cutClip === 'CUT' && /ADMINTERM$/.test(cutLine);
+  add('cortar la seleccion', cutOk,
+    'selecciono "' + cutPicked + '", portapapeles "' + cutClip + '", linea termina en "' + cutLine.slice(-12) + '"');
+  window.adminterm.ptyInput(cutTab.id, String.fromCharCode(3));
+  await sleep(400);
+
+  // --- la barra de pestanas no se recrea al cambiar el titulo ---
+  // Si se recreara, el clic para cambiar de pestana se perderia mientras una
+  // CLI trabaja y cambia de titulo sin parar.
+  const titleTab = app.tabs[0];
+  const domBefore = document.querySelector('#tabs .tab');
+  for (let i = 0; i < 6; i++) {
+    titleTab.panes[0].title = 'trabajando ' + i;
+    app.renderTabs();
+  }
+  const domAfter = document.querySelector('#tabs .tab');
+  const titleShown = domAfter && domAfter.querySelector('.tab-title').textContent;
+  add('la barra de pestanas no se recrea', domBefore === domAfter && /trabajando 5/.test(titleShown || ''),
+    domBefore === domAfter ? 'mismo elemento tras 6 cambios de titulo, muestra "' + titleShown + '"' : 'el elemento se recreo');
 
   // --- cerrar pestana ---
   app.destroyTab(app.tabs[1]);
