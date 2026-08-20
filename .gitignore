@@ -1,6 +1,5 @@
 node_modules/
-dist/
-dist2/
+dist*/
 __pycache__/
 src/renderer/vendor/
 build/icon.ico
