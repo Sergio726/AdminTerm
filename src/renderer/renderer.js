@@ -184,43 +184,69 @@ function termOptions() {
   return opts;
 }
 
+/**
+ * Crea el boton de una pestana. Se hace UNA vez por pestana: mientras una CLI
+ * trabaja cambia de titulo sin parar, y si la barra se reconstruyera en cada
+ * cambio el elemento desapareceria entre el mousedown y el mouseup, con lo que
+ * el clic para cambiar de pestana se perdia y parecia que la pestana no
+ * respondia hasta que la CLI terminaba.
+ */
+function createTabElement(tab) {
+  const el = document.createElement('div');
+  el.setAttribute('role', 'tab');
+
+  const dot = document.createElement('span');
+  dot.className = 'tab-dot';
+  dot.textContent = '●';
+  dot.title = 'Esta pestana espera que confirmes algo';
+  dot.hidden = true;
+  el.appendChild(dot);
+
+  const title = document.createElement('span');
+  title.className = 'tab-title';
+  el.appendChild(title);
+
+  const close = document.createElement('button');
+  close.className = 'tab-close';
+  close.textContent = '×';
+  close.title = 'Cerrar pestana';
+  close.addEventListener('click', (e) => {
+    e.stopPropagation();
+    closeTab(tab);
+  });
+  el.appendChild(close);
+
+  el.addEventListener('click', () => activateTab(tab));
+  el.addEventListener('auxclick', (e) => {
+    if (e.button === 1) closeTab(tab);
+  });
+
+  tab.el = el;
+  tab.dotEl = dot;
+  tab.titleEl = title;
+  return el;
+}
+
+/** Refresca la barra sin recrearla: solo cambia lo que de verdad cambio. */
 function renderTabs() {
-  els.tabs.textContent = '';
   for (const tab of tabs) {
-    const el = document.createElement('div');
-    el.className = 'tab' + (tab === activeTab ? ' active' : '') + (tab.dead ? ' dead' : '') +
+    if (!tab.el) createTabElement(tab);
+    const className = 'tab' + (tab === activeTab ? ' active' : '') + (tab.dead ? ' dead' : '') +
       (tab.waiting ? ' waiting' : '');
-    el.setAttribute('role', 'tab');
+    if (tab.el.className !== className) tab.el.className = className;
+    if (tab.dotEl.hidden === tab.waiting) tab.dotEl.hidden = !tab.waiting;
 
-    if (tab.waiting) {
-      const dot = document.createElement('span');
-      dot.className = 'tab-dot';
-      dot.textContent = '●';
-      dot.title = 'Esta pestana espera que confirmes algo';
-      el.appendChild(dot);
-    }
-
-    const title = document.createElement('span');
-    title.className = 'tab-title';
-    title.textContent = tab.panes.length > 1 ? `${tab.title} (${tab.panes.length})` : tab.title;
-    el.appendChild(title);
-
-    const close = document.createElement('button');
-    close.className = 'tab-close';
-    close.textContent = '×';
-    close.title = 'Cerrar pestana';
-    close.addEventListener('click', (e) => {
-      e.stopPropagation();
-      closeTab(tab);
-    });
-    el.appendChild(close);
-
-    el.addEventListener('click', () => activateTab(tab));
-    el.addEventListener('auxclick', (e) => {
-      if (e.button === 1) closeTab(tab);
-    });
-    els.tabs.appendChild(el);
+    const label = tab.panes.length > 1 ? `${tab.title} (${tab.panes.length})` : tab.title;
+    if (tab.titleEl.textContent !== label) tab.titleEl.textContent = label;
   }
+
+  for (const el of [...els.tabs.children]) {
+    if (!tabs.some((tab) => tab.el === el)) el.remove();
+  }
+  tabs.forEach((tab, i) => {
+    if (els.tabs.children[i] !== tab.el) els.tabs.insertBefore(tab.el, els.tabs.children[i] || null);
+  });
+
   updateStatus();
 }
 
@@ -428,6 +454,18 @@ async function createPane(tab, shellKey) {
 
   el.addEventListener('focusin', () => focusPane(pane));
   el.addEventListener('mousedown', () => focusPane(pane));
+
+  // El boton derecho es de AdminTerm (copiar y pegar). Si la CLI de dentro
+  // pidio eventos de raton, xterm se lo mandaria ademas al PTY, y hay CLI que
+  // tratan ese clic como 'pegar': el texto entraria dos veces. Se corta en
+  // captura, antes de que xterm lo vea; el evento contextmenu sigue llegando.
+  const holdRightButton = (e) => {
+    if (e.button !== 2) return;
+    e.stopPropagation();
+    focusPane(pane);
+  };
+  el.addEventListener('mousedown', holdRightButton, true);
+  el.addEventListener('mouseup', holdRightButton, true);
 
   el.addEventListener('contextmenu', (e) => {
     e.preventDefault();
@@ -817,6 +855,48 @@ document.addEventListener(
   true
 );
 
+/**
+ * Borra el texto seleccionado con el raton; si es cortar, antes lo copia.
+ *
+ * Solo se puede borrar en la linea que se esta escribiendo: lo demas es salida
+ * ya impresa, no un documento editable. Se hace escribiendo en el PTY lo mismo
+ * que escribirias tu (mover el cursor al final de la seleccion y pulsar
+ * retroceso), asi que funciona con cualquier shell sin saber nada de ella.
+ */
+function cutSelection(pane, cut) {
+  if (!pane) return false;
+  const term = pane.term;
+  const text = term.getSelection();
+  if (!text) return false;
+  if (cut) api.writeClipboard(text);
+
+  const pos = term.getSelectionPosition();
+  const buffer = term.buffer.active;
+  const row = buffer.baseY + buffer.cursorY;
+  const editable = buffer.type === 'normal' && pos && pos.start.y === row && pos.end.y === row;
+
+  if (!editable) {
+    term.clearSelection();
+    flashStatus(cut ? 'Copiado: borrar solo funciona en la linea que escribes'
+      : 'Borrar solo funciona en la linea que escribes', 2600);
+    return false;
+  }
+
+  const appKeys = term.modes && term.modes.applicationCursorKeysMode;
+  const left = ESC + (appKeys ? 'OD' : '[D');
+  const right = ESC + (appKeys ? 'OC' : '[C');
+  const backspace = String.fromCharCode(127);
+  const move = buffer.cursorX - pos.end.x;
+
+  api.ptyInput(
+    pane.id,
+    (move > 0 ? left.repeat(move) : right.repeat(-move)) + backspace.repeat(pos.end.x - pos.start.x)
+  );
+  term.clearSelection();
+  flashStatus(cut ? 'Cortado' : 'Borrado');
+  return true;
+}
+
 function insertPaths(paths) {
   const pane = activePane();
   if (!pane || !paths.length) return;
@@ -1088,6 +1168,14 @@ function runSearch(back = false) {
 function isAppShortcut(e) {
   const k = e.key.toLowerCase();
 
+  // Ctrl+X y Supr solo son de AdminTerm si hay algo seleccionado con el raton.
+  // Sin seleccion tienen que llegar a la CLI: en nano, Ctrl+X es salir.
+  if ((k === 'x' && e.ctrlKey) || (k === 'delete' && !e.ctrlKey)) {
+    if (e.altKey || e.shiftKey) return false;
+    const pane = activePane();
+    return !!(pane && pane.term.hasSelection());
+  }
+
   // Ayuda: F1 a secas, como en el resto de Windows.
   if (k === 'f1' && !e.ctrlKey && !e.altKey && !e.shiftKey) return true;
 
@@ -1130,6 +1218,8 @@ document.addEventListener('keydown', (e) => {
   e.preventDefault();
 
   if (k === 'f1') return toggleHelp();
+  if (k === 'x') return void cutSelection(activePane(), true);
+  if (k === 'delete') return void cutSelection(activePane(), false);
 
   if (e.altKey) {
     if (e.shiftKey) {
@@ -1629,6 +1719,8 @@ window.__adminTerm = {
   openHelp,
   closeHelp,
   pasteData,
+  cutSelection,
+  renderTabs,
   waitingFromText,
   checkWaiting,
   setFontSize,

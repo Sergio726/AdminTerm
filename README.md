@@ -26,7 +26,7 @@ y genera el icono.
 | --- | --- |
 | Arranque normal (pide UAC) | `npm start` o doble clic en `Iniciar-AdminTerm.bat` |
 | Sin pedir administrador | `npm run start:normal` |
-| Comprobar que todo funciona | `npm run selftest` (28 comprobaciones, sin abrir ventana) |
+| Comprobar que todo funciona | `npm run selftest` (42 comprobaciones, sin abrir ventana) |
 | Acceso directo en Escritorio + Inicio | `powershell -ExecutionPolicy Bypass -File Crear-acceso-directo.ps1` |
 | Generar un `.exe` distribuible | `npm run build` (portable) o `npm run dist` (instalador) |
 
@@ -134,12 +134,19 @@ aplican en vivo a todos los paneles abiertos.
 | `Ctrl+Tab` / `Ctrl+1..9` | Cambiar de pestaña |
 | `Ctrl+Shift+C` | Copiar (`Ctrl+C` queda libre para las CLI) |
 | `Ctrl+V` / `Ctrl+Shift+V` | Pegar |
+| `Ctrl+X` / `Supr` | Cortar o borrar lo seleccionado con el ratón |
 | `Ctrl+Shift+F` | Buscar |
 | `Ctrl+Shift+M` | Micrófono |
 | `Ctrl+Shift+O` | Insertar rutas de archivos |
 | `Ctrl` `+` / `-` / `0` | Tamaño de fuente |
 | `Ctrl+,` | Ajustes |
 | Clic derecho | Copia la selección, o pega si no hay selección |
+
+Seleccionar con el ratón y pulsar `Ctrl+X` o `Supr` corta o borra lo
+seleccionado, pero solo si cae en la línea que estás escribiendo: el resto de la
+pantalla es salida ya impresa, no un documento editable. Sin nada seleccionado
+ambas teclas llegan intactas a lo que corras dentro (en nano, `Ctrl+X` sigue
+siendo salir).
 
 `Ctrl+V` lo atiende AdminTerm y no llega a lo que corras dentro. Es a propósito:
 si se dejara pasar, PSReadLine (que también tiene `Ctrl+V` = pegar) pegaría por
