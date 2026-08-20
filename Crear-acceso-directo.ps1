@@ -7,10 +7,11 @@ $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $icon = Join-Path $root 'build\icon.ico'
 
 # Se prefiere la app compilada (arranca mas rapido y no depende de Node). Si hay
-# varias carpetas de salida se toma la MAS RECIENTE: una compilacion antigua
-# puede quedar bloqueada por un proceso vivo y obligar a construir en otra.
-$packaged = @('dist', 'dist2') |
-    ForEach-Object { Join-Path $root "$_\win-unpacked\AdminTerm.exe" } |
+# varias carpetas de salida (dist, dist2, dist3...) se toma la MAS RECIENTE:
+# no se puede recompilar sobre una carpeta con la app abierta, asi que cada
+# compilacion hecha con AdminTerm en marcha aterriza en una carpeta nueva.
+$packaged = Get-ChildItem -Path $root -Directory -Filter 'dist*' -ErrorAction SilentlyContinue |
+    ForEach-Object { Join-Path $_.FullName 'win-unpacked\AdminTerm.exe' } |
     Where-Object { Test-Path $_ } |
     Sort-Object { (Get-Item $_).LastWriteTime } -Descending |
     Select-Object -First 1
