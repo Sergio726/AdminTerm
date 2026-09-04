@@ -61,17 +61,21 @@ window.__adminTermTabs = tabs; // usado por `npm run selftest`
 let activeTab = null;
 let toastTimer = null;
 let sessionSaveTimer = null;
+let recentSaveTimer = null;
 let lastPaneError = '';
+/** Carpetas en las que se ha trabajado, la mas reciente primero. */
+let recentProjects = [];
 
 const $ = (id) => document.getElementById(id);
 const els = {
-  tabs: $('tabs'), terminals: $('terminals'), shellSelect: $('shell-select'),
+  tabs: $('tabs'), tabsStrip: $('tabs-strip'), tabsPrev: $('tabs-prev'), tabsNext: $('tabs-next'),
+  tabMenu: $('tab-menu'), terminals: $('terminals'), shellSelect: $('shell-select'),
   fontLabel: $('font-size-label'), statusPriv: $('status-priv'), statusShell: $('status-shell'),
   statusMsg: $('status-msg'), statusMic: $('status-mic'), statusVersions: $('status-versions'),
   dropOverlay: $('drop-overlay'), micOverlay: $('mic-overlay'), micTimer: $('mic-timer'),
   btnMic: $('btn-mic'), modal: $('settings-modal'), toast: $('toast'),
   searchBar: $('search-bar'), searchInput: $('search-input'),
-  helpModal: $('help-modal'),
+  helpModal: $('help-modal'), recentModal: $('recent-modal'), recentList: $('recent-list'),
 };
 
 /** El panel que recibe teclado, archivos y dictado. */
@@ -238,6 +242,10 @@ function renderTabs() {
 
     const label = tab.panes.length > 1 ? `${tab.title} (${tab.panes.length})` : tab.title;
     if (tab.titleEl.textContent !== label) tab.titleEl.textContent = label;
+
+    // Al pasar el raton se ve en que carpeta trabaja la pestana.
+    const tip = tab.cwd || '';
+    if (tab.el.title !== tip) tab.el.title = tip;
   }
 
   for (const el of [...els.tabs.children]) {
@@ -247,8 +255,111 @@ function renderTabs() {
     if (els.tabs.children[i] !== tab.el) els.tabs.insertBefore(tab.el, els.tabs.children[i] || null);
   });
 
+  updateTabsOverflow();
   updateStatus();
 }
+
+// --- desbordamiento de la barra ---------------------------------------------
+//
+// La barra no crece: si hay mas pestanas de las que caben, se desplaza. Las
+// flechas solo aparecen cuando hace falta, y la pestana activa siempre se
+// trae a la vista.
+
+function updateTabsOverflow() {
+  const strip = els.tabs;
+  const overflow = strip.scrollWidth > strip.clientWidth + 1;
+  if (els.tabsPrev.hidden === overflow) {
+    els.tabsPrev.hidden = !overflow;
+    els.tabsNext.hidden = !overflow;
+  }
+  els.tabsStrip.classList.toggle('overflow', overflow);
+  if (!overflow) return;
+  els.tabsPrev.disabled = strip.scrollLeft <= 0;
+  els.tabsNext.disabled = strip.scrollLeft + strip.clientWidth >= strip.scrollWidth - 1;
+}
+
+function scrollTabs(direction) {
+  const strip = els.tabs;
+  strip.scrollBy({ left: direction * Math.max(80, strip.clientWidth * 0.6), behavior: 'instant' });
+}
+
+/** Desplaza la barra lo justo para que la pestana quede entera a la vista. */
+function revealTab(tab) {
+  if (!tab || !tab.el) return;
+  const strip = els.tabs;
+  const left = tab.el.offsetLeft;
+  const right = left + tab.el.offsetWidth;
+  if (left < strip.scrollLeft) strip.scrollTo({ left, behavior: 'instant' });
+  else if (right > strip.scrollLeft + strip.clientWidth) {
+    strip.scrollTo({ left: right - strip.clientWidth, behavior: 'instant' });
+  }
+  updateTabsOverflow();
+}
+
+// --- menu de pestanas abiertas (clic derecho en "+") ------------------------
+
+function closeTabMenu() {
+  if (els.tabMenu.hidden) return;
+  els.tabMenu.hidden = true;
+  els.tabMenu.textContent = '';
+  const pane = activePane();
+  if (pane) pane.term.focus();
+}
+
+function openTabMenu(anchor) {
+  const menu = els.tabMenu;
+  menu.textContent = '';
+
+  const head = document.createElement('div');
+  head.className = 'tab-menu-head';
+  head.textContent = `Pestanas abiertas (${tabs.length})`;
+  menu.appendChild(head);
+
+  tabs.forEach((tab, i) => {
+    const item = document.createElement('button');
+    item.type = 'button';
+    item.setAttribute('role', 'menuitem');
+    item.className = 'tab-menu-item' + (tab === activeTab ? ' active' : '') +
+      (tab.waiting ? ' waiting' : '') + (tab.dead ? ' dead' : '');
+
+    const index = document.createElement('span');
+    index.className = 'tab-menu-index';
+    index.textContent = String(i + 1);
+
+    const title = document.createElement('span');
+    title.className = 'tab-menu-title';
+    title.textContent = tab.panes.length > 1 ? `${tab.title} (${tab.panes.length} paneles)` : tab.title;
+
+    const where = document.createElement('span');
+    where.className = 'tab-menu-path';
+    where.textContent = tab.cwd || '';
+
+    item.append(index, title, where);
+    item.title = i < 9 ? `Ctrl+${i + 1}` : '';
+    item.addEventListener('click', () => {
+      closeTabMenu();
+      activateTab(tab);
+    });
+    menu.appendChild(item);
+  });
+
+  menu.hidden = false;
+
+  // Bajo el boton, sin salirse de la ventana.
+  const rect = anchor.getBoundingClientRect();
+  const width = menu.offsetWidth;
+  menu.style.top = `${Math.round(rect.bottom + 4)}px`;
+  menu.style.left = `${Math.round(Math.max(4, Math.min(rect.left, window.innerWidth - width - 4)))}px`;
+
+  const current = menu.querySelector('.tab-menu-item.active') || menu.querySelector('.tab-menu-item');
+  if (current) current.focus();
+}
+
+document.addEventListener('mousedown', (e) => {
+  if (!els.tabMenu.hidden && !els.tabMenu.contains(e.target)) closeTabMenu();
+});
+window.addEventListener('blur', closeTabMenu);
+window.addEventListener('resize', closeTabMenu);
 
 function updateStatus() {
   if (!info) return;
@@ -381,12 +492,13 @@ function createTab() {
     get term() { return this.activePane ? this.activePane.term : null; },
     get id() { return this.activePane ? this.activePane.id : null; },
     get title() { return this.activePane ? this.activePane.title : ''; },
+    get cwd() { return this.activePane ? this.activePane.cwd : ''; },
     get dead() { return this.panes.length > 0 && this.panes.every((p) => p.dead); },
     get waiting() { return this.panes.some((p) => p.waiting); },
   };
 }
 
-async function createPane(tab, shellKey) {
+async function createPane(tab, shellKey, cwd) {
   const el = document.createElement('div');
   el.className = 'term-pane';
   // Debe estar en el DOM y visible antes de medir, o fit() da 80x24.
@@ -423,6 +535,7 @@ async function createPane(tab, shellKey) {
     shellKey: shellKey || settings.shell,
     cols: term.cols,
     rows: term.rows,
+    cwd: cwd || undefined,
   });
 
   if (!res || !res.ok) {
@@ -436,11 +549,24 @@ async function createPane(tab, shellKey) {
   const pane = {
     id: res.id, term, fit, search, el, tab,
     shellKey: res.shellKey, title: res.label, dead: false, flex: 1,
+    // Carpeta en la que arranco y en la que esta ahora (la anuncia la shell).
+    startCwd: normalizeCwd(res.cwd), cwd: normalizeCwd(res.cwd), cwdFromShell: false,
+    // Un panel "intacto" (sin teclear ni moverse) se puede sustituir sin perder nada.
+    touched: false,
   };
   tab.panes.push(pane);
 
+  // La shell anuncia su carpeta en cada prompt con OSC 9;9 (ver main.js).
+  // Se engancha a esa secuencia y solo a ella: nada de mirar cada chunk.
+  term.parser.registerOscHandler(9, (data) => {
+    if (!data.startsWith('9;')) return false;
+    setPaneCwd(pane, data.slice(2));
+    return true;
+  });
+
   term.onData((data) => {
     api.ptyInput(pane.id, data);
+    pane.touched = true;
     setPaneWaiting(pane, false); // si estas contestando, el aviso sobra
   });
   term.onTitleChange((t) => {
@@ -492,10 +618,10 @@ async function createPane(tab, shellKey) {
   return pane;
 }
 
-async function newTab(shellKey) {
+async function newTab(shellKey, cwd) {
   const tab = createTab();
   tabs.push(tab);
-  const pane = await createPane(tab, shellKey);
+  const pane = await createPane(tab, shellKey, cwd);
   if (!pane) {
     tab.view.remove();
     tabs.splice(tabs.indexOf(tab), 1);
@@ -526,7 +652,8 @@ async function splitActive(direction) {
   }
 
   activeTab.direction = direction;
-  const pane = await createPane(activeTab, settings.shell);
+  // El panel nuevo arranca en la carpeta del que se divide: es lo que se espera.
+  const pane = await createPane(activeTab, settings.shell, activeTab.cwd);
   if (!pane) return null;
 
   activeTab.activePane = pane;
@@ -573,6 +700,7 @@ function activateTab(tab) {
   }
   layoutTab(tab);
   renderTabs();
+  revealTab(tab);
   requestAnimationFrame(() => {
     fitTab(tab);
     if (tab.activePane) tab.activePane.term.focus();
@@ -760,7 +888,11 @@ function layoutSnapshot() {
     activeIndex: Math.max(0, tabs.indexOf(activeTab)),
     tabs: tabs.map((tab) => ({
       direction: tab.direction,
-      panes: tab.panes.map((p) => ({ shellKey: p.shellKey, flex: Number(p.flex.toFixed(3)) })),
+      panes: tab.panes.map((p) => ({
+        shellKey: p.shellKey,
+        flex: Number(p.flex.toFixed(3)),
+        cwd: p.cwd || '',
+      })),
     })),
   };
 }
@@ -783,8 +915,12 @@ async function restoreSession(saved) {
 
     for (const paneSpec of spec.panes) {
       const known = info.shells.some((s) => s.key === paneSpec.shellKey);
-      const pane = await createPane(tab, known ? paneSpec.shellKey : settings.shell);
-      if (pane) pane.flex = Number(paneSpec.flex) > 0 ? Number(paneSpec.flex) : 1;
+      const cwd = typeof paneSpec.cwd === 'string' ? paneSpec.cwd : '';
+      const pane = await createPane(tab, known ? paneSpec.shellKey : settings.shell, cwd);
+      if (!pane) continue;
+      pane.flex = Number(paneSpec.flex) > 0 ? Number(paneSpec.flex) : 1;
+      // Una pestana reabierta es trabajo del usuario: no se sustituye sola.
+      pane.touched = true;
     }
 
     if (!tab.panes.length) {
@@ -798,6 +934,214 @@ async function restoreSession(saved) {
   if (!restored) return false;
   activateTab(tabs[Math.min(saved.activeIndex || 0, tabs.length - 1)]);
   return true;
+}
+
+// ---------------------------------------------------------------------------
+// Carpeta de trabajo y proyectos recientes
+// ---------------------------------------------------------------------------
+//
+// Cada shell anuncia su carpeta en el prompt (OSC 9;9, ver main.js). Con eso
+// cada panel sabe donde esta, la sesion se reabre en las mismas carpetas y se
+// lleva una lista de "proyectos" (carpetas en las que se ha trabajado) para
+// volver a ellos con un clic al arrancar.
+
+const MAX_RECENT = 30;
+
+/** Deja la ruta como la escribe Windows: unidad en mayuscula, sin comillas ni barra final. */
+function normalizeCwd(raw) {
+  let p = String(raw || '').trim().replace(/^"+|"+$/g, '').replace(/\//g, '\\');
+  if (/^[a-z]:/.test(p)) p = p[0].toUpperCase() + p.slice(1);
+  if (/^[A-Z]:$/.test(p)) p += '\\';
+  if (p.length > 3) p = p.replace(/\\+$/, '');
+  return p;
+}
+
+function samePath(a, b) {
+  return normalizeCwd(a).toLowerCase() === normalizeCwd(b).toLowerCase();
+}
+
+function isUnder(p, root) {
+  if (!root) return false;
+  const a = normalizeCwd(p).toLowerCase();
+  const r = normalizeCwd(root).toLowerCase();
+  return a === r || a.startsWith(r.endsWith('\\') ? r : r + '\\');
+}
+
+/**
+ * Que carpetas cuentan como proyecto: cualquiera menos las que no dicen nada
+ * de en que trabajas (tu carpeta de usuario, la raiz de una unidad, Windows y
+ * los datos de aplicaciones).
+ */
+function isProjectPath(p) {
+  if (!p || !/^[A-Z]:\\/.test(p)) return false;
+  if (/^[A-Z]:\\$/.test(p)) return false;
+  if (!info) return true;
+  if (samePath(p, info.home)) return false;
+  if (isUnder(p, info.windir)) return false;
+  if (isUnder(p, info.home + '\\AppData')) return false;
+  return true;
+}
+
+function projectName(p) {
+  return normalizeCwd(p).split('\\').filter(Boolean).pop() || p;
+}
+
+/** La shell del panel acaba de anunciar en que carpeta esta. */
+function setPaneCwd(pane, raw) {
+  const cwd = normalizeCwd(raw);
+  if (!cwd) return;
+  pane.cwdFromShell = true;
+  if (cwd !== pane.cwd) {
+    pane.cwd = cwd;
+    if (!samePath(cwd, pane.startCwd)) pane.touched = true;
+    renderTabs();
+    scheduleSessionSave();
+  }
+  noteProject(cwd);
+}
+
+/** Apunta una visita a la carpeta y la sube al principio de la lista. */
+function noteProject(cwd) {
+  if (!isProjectPath(cwd)) return;
+  const i = recentProjects.findIndex((r) => samePath(r.path, cwd));
+  const entry = i >= 0 ? recentProjects.splice(i, 1)[0] : { path: cwd, count: 0 };
+  entry.path = cwd;
+  entry.lastUsed = new Date().toISOString();
+  entry.count = (entry.count || 0) + 1;
+  recentProjects.unshift(entry);
+  if (recentProjects.length > MAX_RECENT) recentProjects.length = MAX_RECENT;
+  scheduleRecentSave();
+}
+
+function removeRecent(p) {
+  const i = recentProjects.findIndex((r) => samePath(r.path, p));
+  if (i < 0) return;
+  recentProjects.splice(i, 1);
+  scheduleRecentSave();
+  if (!els.recentModal.hidden) fillRecentList();
+}
+
+function scheduleRecentSave() {
+  if (info && info.selftest) return;
+  clearTimeout(recentSaveTimer);
+  recentSaveTimer = setTimeout(async () => {
+    // Como la sesion: se guarda sin pasar por patchSettings, que repintaria.
+    settings = await api.setSettings({ recentProjects: recentProjects.slice() });
+  }, 1500);
+}
+
+/** "hace 5 min", "ayer", "hace 3 dias"... para la lista de recientes. */
+function relativeTime(iso) {
+  const t = Date.parse(iso);
+  if (!Number.isFinite(t)) return '';
+  const s = Math.max(0, (Date.now() - t) / 1000);
+  if (s < 60) return 'ahora mismo';
+  if (s < 3600) return `hace ${Math.round(s / 60)} min`;
+  if (s < 86400) return `hace ${Math.round(s / 3600)} h`;
+  const days = Math.round(s / 86400);
+  if (days <= 1) return 'ayer';
+  if (days < 30) return `hace ${days} dias`;
+  const months = Math.round(days / 30);
+  return months <= 1 ? 'hace 1 mes' : `hace ${months} meses`;
+}
+
+function fillRecentList() {
+  const host = els.recentList;
+  host.textContent = '';
+
+  if (!recentProjects.length) {
+    const empty = document.createElement('div');
+    empty.className = 'recent-empty';
+    empty.textContent = 'Todavia no hay proyectos: en cuanto trabajes en una carpeta aparecera aqui.';
+    host.appendChild(empty);
+    return;
+  }
+
+  for (const entry of recentProjects) {
+    // Un div con role=button y no un <button>: dentro va el boton de quitar,
+    // y un boton dentro de otro no es HTML valido.
+    const row = document.createElement('div');
+    row.className = 'recent-row';
+    row.setAttribute('role', 'button');
+    row.tabIndex = 0;
+    row.title = `Abrir una pestana en ${entry.path}`;
+
+    const name = document.createElement('span');
+    name.className = 'recent-name';
+    name.textContent = projectName(entry.path);
+
+    const where = document.createElement('span');
+    where.className = 'recent-path';
+    where.textContent = entry.path;
+
+    const when = document.createElement('span');
+    when.className = 'recent-when';
+    when.textContent = relativeTime(entry.lastUsed);
+
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.className = 'recent-remove';
+    remove.textContent = '×';
+    remove.title = 'Quitar de la lista';
+    remove.setAttribute('aria-label', `Quitar ${entry.path} de la lista`);
+    remove.addEventListener('click', (e) => {
+      e.stopPropagation();
+      removeRecent(entry.path);
+    });
+
+    row.append(name, where, when, remove);
+    const open = () => openProject(entry.path);
+    row.addEventListener('click', open);
+    row.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        open();
+      }
+    });
+    host.appendChild(row);
+  }
+}
+
+/**
+ * Abre una pestana nueva en la carpeta. Si lo unico abierto son pestanas
+ * intactas (recien creadas, sin teclear nada), se cierran: nadie las echara
+ * de menos y asi no queda una pestana de relleno delante del proyecto.
+ */
+async function openProject(p) {
+  closeRecent();
+  const spare = tabs.filter((t) => t.panes.length === 1 && !t.panes[0].touched && !t.panes[0].dead);
+  const onlySpare = spare.length === tabs.length;
+  const tab = await newTab(settings.shell, p);
+  if (!tab) return null;
+  if (onlySpare) for (const t of spare) destroyTab(t);
+  noteProject(p);
+  return tab;
+}
+
+function openRecent() {
+  closeTabMenu();
+  fillRecentList();
+  $('recent-show-on-start').checked = !!settings.showRecentOnStart;
+  els.recentModal.hidden = false;
+  const first = els.recentList.querySelector('.recent-row');
+  (first || $('recent-done')).focus();
+}
+
+function closeRecent() {
+  if (els.recentModal.hidden) return;
+  els.recentModal.hidden = true;
+  const pane = activePane();
+  if (pane) pane.term.focus();
+}
+
+function toggleRecent() {
+  if (els.recentModal.hidden) openRecent();
+  else closeRecent();
+}
+
+async function pickProjectFolder() {
+  const dirs = await api.pickFolder();
+  if (dirs && dirs.length) openProject(normalizeCwd(dirs[0]));
 }
 
 // ---------------------------------------------------------------------------
@@ -1187,7 +1531,7 @@ function isAppShortcut(e) {
   }
 
   if (!e.ctrlKey || e.altKey) return false;
-  if (e.shiftKey && ['t', 'w', 'c', 'v', 'f', 'm', 'o', 'h', 'tab'].includes(k)) return true;
+  if (e.shiftKey && ['t', 'w', 'c', 'v', 'f', 'm', 'o', 'h', 'r', 'tab'].includes(k)) return true;
   // Ctrl+V lo atiende AdminTerm. Si se dejara pasar, xterm mandaria ademas
   // \x16 a la shell y PSReadLine (que tiene Ctrl+V = Pegar) pegaria por su
   // cuenta: el texto entraba dos veces.
@@ -1200,7 +1544,9 @@ function isAppShortcut(e) {
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
     if (mic.recorder) return stopMic(false);
+    if (!els.tabMenu.hidden) return closeTabMenu();
     if (!els.searchBar.hidden) return closeSearch();
+    if (!els.recentModal.hidden) return closeRecent();
     if (!els.helpModal.hidden) return closeHelp();
     if (!els.modal.hidden) return closeSettings();
     if (!els.toast.hidden) return hideToast();
@@ -1252,6 +1598,7 @@ document.addEventListener('keydown', (e) => {
       case 'm': mic.recorder ? stopMic(false) : startMic(); return;
       case 'o': pickFiles(); return;
       case 'h': toggleHelp(); return;
+      case 'r': toggleRecent(); return;
       case 'tab': cycleTab(-1); return;
     }
     return;
@@ -1501,6 +1848,7 @@ function fillSettingsForm() {
   $('set-notifyWaiting').checked = !!settings.notifyWaiting;
   $('set-restoreSession').checked = !!settings.restoreSession;
   $('set-rememberWindow').checked = !!settings.rememberWindow;
+  $('set-showRecentOnStart').checked = !!settings.showRecentOnStart;
   $('set-globalHotkeyEnabled').checked = !!settings.globalHotkeyEnabled;
   $('set-globalHotkey').value = settings.globalHotkey;
   $('set-stt-preset').value = currentSttPreset();
@@ -1540,6 +1888,7 @@ function bindSettingsForm() {
     'set-notifyWaiting': 'notifyWaiting',
     'set-restoreSession': 'restoreSession',
     'set-rememberWindow': 'rememberWindow',
+    'set-showRecentOnStart': 'showRecentOnStart',
   };
   for (const [id, key] of Object.entries(checks)) {
     $(id).addEventListener('change', (e) => patchSettings({ [key]: e.target.checked }));
@@ -1633,6 +1982,35 @@ async function applyHotkey() {
 
 function bindToolbar() {
   $('btn-new-tab').addEventListener('click', () => newTab());
+  $('btn-new-tab').addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+    openTabMenu(e.currentTarget);
+  });
+
+  els.tabsPrev.addEventListener('click', () => scrollTabs(-1));
+  els.tabsNext.addEventListener('click', () => scrollTabs(1));
+  els.tabs.addEventListener('scroll', updateTabsOverflow, { passive: true });
+  // La rueda sobre la barra la desplaza: una barra horizontal no tiene otro eje.
+  els.tabs.addEventListener(
+    'wheel',
+    (e) => {
+      if (e.ctrlKey || !e.deltaY) return;
+      e.preventDefault();
+      els.tabs.scrollBy({ left: e.deltaY, behavior: 'instant' });
+    },
+    { passive: false }
+  );
+  new ResizeObserver(updateTabsOverflow).observe(els.tabs);
+
+  $('btn-recent').addEventListener('click', toggleRecent);
+  $('recent-close').addEventListener('click', closeRecent);
+  $('recent-done').addEventListener('click', closeRecent);
+  $('recent-pick').addEventListener('click', pickProjectFolder);
+  els.recentModal.querySelector('.modal-backdrop').addEventListener('click', closeRecent);
+  $('recent-show-on-start').addEventListener('change', (e) =>
+    patchSettings({ showRecentOnStart: e.target.checked })
+  );
+
   $('btn-split-right').addEventListener('click', () => splitActive('row'));
   $('btn-split-down').addEventListener('click', () => splitActive('column'));
   $('btn-files').addEventListener('click', pickFiles);
@@ -1684,11 +2062,21 @@ async function boot() {
   bindSettingsForm();
   updateStatus();
 
+  recentProjects = (Array.isArray(settings.recentProjects) ? settings.recentProjects : [])
+    .filter((r) => r && typeof r.path === 'string' && r.path)
+    .map((r) => ({ path: normalizeCwd(r.path), lastUsed: r.lastUsed || '', count: Number(r.count) || 0 }));
+
   const saved = settings.session;
   const canRestore =
     settings.restoreSession && !info.selftest && saved && Array.isArray(saved.tabs) && saved.tabs.length;
   if (!canRestore || !(await restoreSession(saved))) {
     await newTab(els.shellSelect.value);
+  }
+
+  // Lo primero que se ve al arrancar: en que has estado trabajando. Se abre
+  // despues de que la pestana tome el foco, para que Enter caiga en la lista.
+  if (settings.showRecentOnStart && recentProjects.length && !info.selftest) {
+    setTimeout(openRecent, 150);
   }
 
   if (settings.globalHotkeyEnabled) api.applyHotkey();
@@ -1718,6 +2106,16 @@ window.__adminTerm = {
   closeSettings,
   openHelp,
   closeHelp,
+  openTabMenu,
+  closeTabMenu,
+  openRecent,
+  closeRecent,
+  openProject,
+  noteProject,
+  removeRecent,
+  normalizeCwd,
+  isProjectPath,
+  updateTabsOverflow,
   pasteData,
   cutSelection,
   renderTabs,
@@ -1728,6 +2126,7 @@ window.__adminTerm = {
   restoreSession,
   probeAudioWav,
   get lastPaneError() { return lastPaneError; },
+  get recentProjects() { return recentProjects; },
   get settings() { return settings; },
   get activeTab() { return activeTab; },
   get activePane() { return activePane(); },

@@ -40,6 +40,10 @@ const DEFAULTS = {
   notifyWaiting: true,
   restoreSession: true,
   rememberWindow: true,
+  // Carpetas en las que se ha trabajado, de la mas reciente a la mas antigua.
+  // Cada entrada: { path, lastUsed (ISO), count }.
+  recentProjects: [],
+  showRecentOnStart: true,
   globalHotkeyEnabled: false,
   globalHotkey: 'Control+Alt+T',
   session: null,
@@ -178,6 +182,43 @@ if (IS_WIN && !elevated && !process.argv.includes('--no-elevate') && getSettings
 }
 
 // ---------------------------------------------------------------------------
+// Integracion con la shell: que anuncie su carpeta actual
+// ---------------------------------------------------------------------------
+//
+// ConPTY no dice en que carpeta esta la shell, y consultarselo al proceso
+// exige codigo nativo. En su lugar la propia shell lo anuncia en cada prompt
+// con la secuencia OSC 9;9 (la misma que usa Windows Terminal), que atraviesa
+// ConPTY intacta y el renderer recoge sin tocar el flujo de salida. Con eso
+// se sabe en que proyecto trabaja cada panel, se reabre la sesion en las
+// mismas carpetas y se construye la lista de proyectos recientes.
+
+const PS_INTEGRATION_SCRIPT = [
+  'if (-not (Test-Path Variable:global:__AdminTermPrompt)) {',
+  '  $global:__AdminTermPrompt = $function:prompt',
+  '  function global:prompt {',
+  '    $e = [char]27',
+  '    $p = $ExecutionContext.SessionState.Path.CurrentFileSystemLocation.ProviderPath',
+  '    "$e]9;9;$p$e\\" + (-join @(& $global:__AdminTermPrompt))',
+  '  }',
+  '}',
+].join('\n');
+
+// -EncodedCommand evita pelearse con las comillas de la linea de comandos.
+const PS_INTEGRATION_ARGS = [
+  '-NoExit',
+  '-EncodedCommand',
+  Buffer.from(PS_INTEGRATION_SCRIPT, 'utf16le').toString('base64'),
+];
+
+// cmd: $E es ESC y $P la carpeta. Se antepone al prompt que ya tuviera.
+const CMD_PROMPT_PREFIX = '$E]9;9;$P$E\\';
+
+// Git Bash: /c/ruta -> C:\ruta. Fuera de una unidad (/usr/bin...) no se anuncia.
+const BASH_PROMPT_COMMAND =
+  'case "$PWD" in /[A-Za-z]/*|/[A-Za-z]) __p="${PWD:1:1}:${PWD:2}"; __p=${__p//\\//\\\\}; ' +
+  'printf \'\\033]9;9;%s\\033\\\\\' "$__p";; esac';
+
+// ---------------------------------------------------------------------------
 // Shells disponibles
 // ---------------------------------------------------------------------------
 
@@ -198,7 +239,7 @@ function detectShells() {
     if (file) found.push({ key, label, file, args });
   };
 
-  add('powershell', 'Windows PowerShell', firstExisting([POWERSHELL]), ['-NoLogo']);
+  add('powershell', 'Windows PowerShell', firstExisting([POWERSHELL]), ['-NoLogo', ...PS_INTEGRATION_ARGS]);
   add(
     'pwsh',
     'PowerShell 7',
@@ -207,7 +248,7 @@ function detectShells() {
       path.join(pf, 'PowerShell', '6', 'pwsh.exe'),
       path.join(local, 'Microsoft', 'WindowsApps', 'pwsh.exe'),
     ]),
-    ['-NoLogo']
+    ['-NoLogo', ...PS_INTEGRATION_ARGS]
   );
   add('cmd', 'Simbolo del sistema', firstExisting([process.env.ComSpec, path.join(SYS32, 'cmd.exe')]));
   add(
@@ -254,6 +295,12 @@ function ptyEnv() {
   env.COLORTERM = 'truecolor';
   env.TERM_PROGRAM = 'AdminTerm';
   env.TERM_PROGRAM_VERSION = app.getVersion();
+  // cmd y Git Bash anuncian su carpeta desde el prompt (ver arriba). Se ponen
+  // para todas las shells: asi tambien lo hace un cmd abierto desde PowerShell.
+  if (!String(env.PROMPT || '').includes(CMD_PROMPT_PREFIX)) {
+    env.PROMPT = CMD_PROMPT_PREFIX + (env.PROMPT || '$P$G');
+  }
+  if (!String(env.PROMPT_COMMAND || '').includes(']9;9;')) env.PROMPT_COMMAND = BASH_PROMPT_COMMAND;
   return env;
 }
 
@@ -691,6 +738,14 @@ const SELFTEST_SCRIPT = String.raw`
   }
   add('shell responde', echoed, echoed ? 'echo ejecutado y devuelto' : 'sin respuesta del shell');
 
+  // La shell tiene que haber anunciado su carpeta en el prompt (OSC 9;9 a
+  // traves de ConPTY): de ahi salen los proyectos recientes y la reapertura
+  // de cada pestana en su carpeta.
+  const cwdDeadline = Date.now() + 6000;
+  while (Date.now() < cwdDeadline && !t0.panes[0].cwdFromShell) await sleep(150);
+  add('la shell anuncia su carpeta', t0.panes[0].cwdFromShell,
+    t0.panes[0].cwdFromShell ? 'OSC 9;9 recibido: ' + t0.panes[0].cwd : 'sin OSC 9;9: la integracion del prompt no funciona');
+
   // --- fuentes monoespaciadas detectadas en el sistema ---
   add('fuentes detectadas', app.fonts.length > 0, app.fonts.join(', ') || 'ninguna');
 
@@ -820,7 +875,8 @@ const SELFTEST_SCRIPT = String.raw`
   add('aviso se auto-oculta', !shown('toast'), 'el toast desaparece solo');
 
   // ...y en reposo no debe quedar ninguna capa superpuesta encima del terminal.
-  const overlays = ['drop-overlay', 'mic-overlay', 'search-bar', 'toast', 'settings-modal', 'help-modal'].filter(shown);
+  const overlays = ['drop-overlay', 'mic-overlay', 'search-bar', 'toast', 'settings-modal', 'help-modal',
+    'recent-modal', 'tab-menu'].filter(shown);
   add('capas en reposo', overlays.length === 0, overlays.length ? 'visibles por error: ' + overlays.join(', ') : 'todas ocultas');
 
   // --- portapapeles (copiar/pegar), preservando lo que tuviera el usuario ---
@@ -1037,6 +1093,86 @@ const SELFTEST_SCRIPT = String.raw`
   add('la barra de pestanas no se recrea', domBefore === domAfter && /trabajando 5/.test(titleShown || ''),
     domBefore === domAfter ? 'mismo elemento tras 6 cambios de titulo, muestra "' + titleShown + '"' : 'el elemento se recreo');
 
+  // --- la barra de pestanas se desplaza cuando no caben ---
+  // Regresion real: con mas de 4 pestanas la quinta quedaba fuera de la barra
+  // y no habia forma de llegar a ella salvo Ctrl+Tab.
+  const tabsEl = document.getElementById('tabs');
+  const savedTitles = app.tabs.map((t) => t.panes[0].title);
+  const extraTabs = [];
+  for (let i = 0; i < 3; i++) {
+    const t = await app.newTab();
+    if (t) extraTabs.push(t);
+  }
+  app.tabs.forEach((t, i) => { t.panes[0].title = 'pestana con un titulo muy largo ' + (i + 1); });
+  app.renderTabs();
+  await sleep(150);
+  const overflowed = tabsEl.scrollWidth > tabsEl.clientWidth + 1;
+  const arrowsShown = !document.getElementById('tabs-next').hidden;
+  const lastTab = app.tabs[app.tabs.length - 1];
+  app.activateTab(lastTab);
+  await sleep(300);
+  const stripRect = tabsEl.getBoundingClientRect();
+  const lastRect = lastTab.el.getBoundingClientRect();
+  const lastVisible = lastRect.right <= stripRect.right + 1 && lastRect.left >= stripRect.left - 1;
+  const scrollBefore = tabsEl.scrollLeft;
+  document.getElementById('tabs-prev').click();
+  await sleep(600);
+  const arrowsWork = tabsEl.scrollLeft < scrollBefore;
+  add('barra con muchas pestanas', overflowed && arrowsShown && lastVisible && arrowsWork,
+    app.tabs.length + ' pestanas: ' + (overflowed ? 'desbordan, ' : 'NO desbordan, ') +
+    (arrowsShown ? 'flechas visibles, ' : 'flechas ocultas, ') +
+    (lastVisible ? 'la ultima queda a la vista' : 'la ultima queda fuera') +
+    (arrowsWork ? ', la flecha desplaza' : ', la flecha NO desplaza'));
+
+  // --- clic derecho en "+": lista de todas las pestanas ---
+  document.getElementById('btn-new-tab').dispatchEvent(
+    new MouseEvent('contextmenu', { bubbles: true, cancelable: true, button: 2 }));
+  await sleep(100);
+  const menuItems = document.querySelectorAll('#tab-menu .tab-menu-item');
+  const menuShown = shown('tab-menu') && menuItems.length === app.tabs.length;
+  const menuTarget = app.tabs[0];
+  if (menuItems[0]) menuItems[0].click();
+  await sleep(200);
+  const menuJumped = app.activeTab === menuTarget && !shown('tab-menu');
+  add('menu de pestanas abiertas', menuShown && menuJumped,
+    menuShown
+      ? (menuJumped ? menuItems.length + ' pestanas listadas; al pulsar una se activa y el menu se cierra'
+        : 'no cambio de pestana o el menu no se cerro')
+      : 'el menu no aparece o no lista todas: ' + menuItems.length + '/' + app.tabs.length);
+
+  for (const t of extraTabs) app.destroyTab(t);
+  app.tabs.forEach((t, i) => { t.panes[0].title = savedTitles[i] || t.panes[0].title; });
+  app.renderTabs();
+  await sleep(200);
+
+  // --- carpeta de trabajo: la shell la anuncia y AdminTerm la recuerda ---
+  const cwdPane = app.activeTab.panes[0];
+  const fakeProject = 'C:\\proyectos\\demo-adminterm';
+  await new Promise((r) => cwdPane.term.write(esc + ']9;9;' + fakeProject + esc + '\\', r));
+  await sleep(100);
+  const cwdOk = cwdPane.cwd === fakeProject;
+  const recent = app.recentProjects;
+  const recentOk = recent.length > 0 && recent[0].path === fakeProject;
+  const snapCwd = app.layoutSnapshot().tabs.some((t) => t.panes.some((p) => p.cwd === fakeProject));
+  const filtered = !app.isProjectPath('C:\\') && !app.isProjectPath('C:\\Windows\\System32') &&
+    app.isProjectPath('C:\\Users\\alguien\\source\\repos\\app') &&
+    app.normalizeCwd('c:/users/alguien/repo/') === 'C:\\users\\alguien\\repo';
+  add('carpeta de trabajo por OSC 9;9', cwdOk && recentOk && snapCwd && filtered,
+    !cwdOk ? 'el panel no la recibio: "' + cwdPane.cwd + '"'
+      : !recentOk ? 'no entra en recientes'
+        : !snapCwd ? 'no va a la sesion guardada'
+          : !filtered ? 'el filtro de carpetas o la normalizacion fallan'
+            : 'el panel la conoce, entra en recientes y en la sesion guardada; raiz y Windows se ignoran');
+
+  app.openRecent();
+  const recentRows = document.querySelectorAll('#recent-list .recent-row');
+  const recentShown = shown('recent-modal') && recentRows.length === recent.length &&
+    recentRows[0].textContent.includes('demo-adminterm');
+  app.closeRecent();
+  app.removeRecent(fakeProject);
+  add('panel de proyectos recientes', recentShown && !shown('recent-modal'),
+    recentShown ? 'lista ' + recentRows.length + ' proyecto(s) con el nuevo primero, y cierra' : 'no muestra el proyecto');
+
   // --- cerrar pestana ---
   app.destroyTab(app.tabs[1]);
   await sleep(200);
@@ -1176,6 +1312,20 @@ function runSelfTest(win) {
           : `${localCases.length} casos, incluida la trampa 127.0.0.1.ejemplo.com`,
       });
 
+      // La integracion del prompt viaja codificada: si se rompiera la
+      // codificacion, PowerShell arrancaria con un error y sin anunciar carpeta.
+      const ps = SHELLS.find((s) => s.key === 'powershell' || s.key === 'pwsh');
+      const encoded = ps ? ps.args[ps.args.indexOf('-EncodedCommand') + 1] : '';
+      const decoded = encoded ? Buffer.from(encoded, 'base64').toString('utf16le') : '';
+      result.checks.push({
+        name: 'integracion del prompt',
+        ok: decoded === PS_INTEGRATION_SCRIPT && decoded.includes(']9;9;') &&
+          ptyEnv().PROMPT.startsWith(CMD_PROMPT_PREFIX) && ptyEnv().PROMPT_COMMAND.includes(']9;9;'),
+        detail: decoded === PS_INTEGRATION_SCRIPT
+          ? 'PowerShell (-EncodedCommand), cmd (PROMPT) y Git Bash (PROMPT_COMMAND) anuncian su carpeta'
+          : 'el script de PowerShell no sobrevive a la codificacion',
+      });
+
       const python = findPython();
       result.checks.push({
         name: 'python para Whisper',
@@ -1291,6 +1441,7 @@ ipcMain.handle('app:info', () => ({
   winBuild: Number((os.release().split('.')[2] || '0')) || undefined,
   defaultCwd: defaultCwd(),
   home: os.homedir(),
+  windir: SYSROOT,
   userData: app.getPath('userData'),
   settingsFile: settingsPath(),
 }));

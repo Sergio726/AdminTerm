@@ -111,8 +111,20 @@ panel activo, los comandos que listan lo que puedes ejecutar (`Get-Command`,
 `help`, `compgen -c`...). Al pulsar uno se escribe en el terminal sin ejecutarlo.
 
 **Reabre donde lo dejaste.** Al cerrar guarda qué pestañas y paneles tenías, con
-sus proporciones, y los reconstruye al abrir. También recuerda el tamaño y la
-posición de la ventana.
+sus proporciones y en qué carpeta estaba cada uno, y los reconstruye al abrir.
+También recuerda el tamaño y la posición de la ventana.
+
+**Proyectos recientes.** Cada shell (PowerShell, cmd y Git Bash) anuncia en qué
+carpeta está en cada prompt, con la misma secuencia `OSC 9;9` que usa Windows
+Terminal. Con eso AdminTerm lleva una lista de las carpetas en las que has
+trabajado y te la enseña al arrancar: pulsa una y se abre una pestaña ahí. La
+lista está siempre en el botón 🕘 o con `Ctrl+Shift+R`; se puede quitar del
+arranque en Ajustes → Sesión. Tu carpeta de usuario, la raíz de una unidad y
+Windows no cuentan como proyecto.
+
+**Muchas pestañas.** Si no caben en la barra, esta se desplaza (rueda o flechas)
+y la pestaña activa siempre queda a la vista. Con clic derecho en `+` sale la
+lista completa de pestañas abiertas, con su carpeta, para saltar a cualquiera.
 
 **Atajo global.** Opcional, para traer AdminTerm al frente desde cualquier sitio
 (por defecto `Control+Alt+T`, configurable).
@@ -132,6 +144,8 @@ aplican en vivo a todos los paneles abiertos.
 | `Alt`+flechas | Moverse entre paneles |
 | `Ctrl+Shift+W` | Cerrar el panel activo (o la pestaña si es el último) |
 | `Ctrl+Tab` / `Ctrl+1..9` | Cambiar de pestaña |
+| Clic derecho en `+` | Lista de todas las pestañas abiertas |
+| `Ctrl+Shift+R` | Proyectos recientes |
 | `Ctrl+Shift+C` | Copiar (`Ctrl+C` queda libre para las CLI) |
 | `Ctrl+V` / `Ctrl+Shift+V` | Pegar |
 | `Ctrl+X` / `Supr` | Cortar o borrar lo seleccionado con el ratón |
