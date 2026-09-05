@@ -26,12 +26,12 @@ y genera el icono.
 | --- | --- |
 | Arranque normal (pide UAC) | `npm start` o doble clic en `Iniciar-AdminTerm.bat` |
 | Sin pedir administrador | `npm run start:normal` |
-| Comprobar que todo funciona | `npm run selftest` (42 comprobaciones, sin abrir ventana) |
+| Comprobar que todo funciona | `npm run selftest` (48 comprobaciones, sin abrir ventana) |
 | Acceso directo en Escritorio + Inicio | `powershell -ExecutionPolicy Bypass -File Crear-acceso-directo.ps1` |
 | Generar un `.exe` distribuible | `npm run build` (portable) o `npm run dist` (instalador) |
 
 `npm run build` deja un ejecutable autocontenido en
-`dist\AdminTerm-portable-1.1.0.exe` (~86 MB) que funciona en cualquier Windows
+`dist\AdminTerm-portable-1.2.0.exe` (~86 MB) que funciona en cualquier Windows
 x64 sin Node ni instalación.
 
 Al abrir, AdminTerm se relanza a sí misma pidiendo UAC. Si cancelas el aviso, la
