@@ -192,23 +192,19 @@ if (IS_WIN && !elevated && !process.argv.includes('--no-elevate') && getSettings
 // se sabe en que proyecto trabaja cada panel, se reabre la sesion en las
 // mismas carpetas y se construye la lista de proyectos recientes.
 
-const PS_INTEGRATION_SCRIPT = [
-  'if (-not (Test-Path Variable:global:__AdminTermPrompt)) {',
-  '  $global:__AdminTermPrompt = $function:prompt',
-  '  function global:prompt {',
-  '    $e = [char]27',
-  '    $p = $ExecutionContext.SessionState.Path.CurrentFileSystemLocation.ProviderPath',
-  '    "$e]9;9;$p$e\\" + (-join @(& $global:__AdminTermPrompt))',
-  '  }',
-  '}',
-].join('\n');
+// Va en texto claro con -Command y sin una sola comilla doble: asi la linea de
+// comandos no necesita escapes, y no se usa -EncodedCommand, que Kaspersky
+// trata como indicio de malware (llego a borrar el .exe de la app por ello).
+const PS_INTEGRATION_SCRIPT =
+  'if (-not (Test-Path Variable:global:__AdminTermPrompt)) { ' +
+  '$global:__AdminTermPrompt = $function:prompt; ' +
+  'function global:prompt { ' +
+  '$e = [char]27; ' +
+  '$p = $ExecutionContext.SessionState.Path.CurrentFileSystemLocation.ProviderPath; ' +
+  "$e + ']9;9;' + $p + $e + '\\' + (-join @(& $global:__AdminTermPrompt)) " +
+  '} }';
 
-// -EncodedCommand evita pelearse con las comillas de la linea de comandos.
-const PS_INTEGRATION_ARGS = [
-  '-NoExit',
-  '-EncodedCommand',
-  Buffer.from(PS_INTEGRATION_SCRIPT, 'utf16le').toString('base64'),
-];
+const PS_INTEGRATION_ARGS = ['-NoExit', '-Command', PS_INTEGRATION_SCRIPT];
 
 // cmd: $E es ESC y $P la carpeta. Se antepone al prompt que ya tuviera.
 const CMD_PROMPT_PREFIX = '$E]9;9;$P$E\\';
@@ -1312,18 +1308,19 @@ function runSelfTest(win) {
           : `${localCases.length} casos, incluida la trampa 127.0.0.1.ejemplo.com`,
       });
 
-      // La integracion del prompt viaja codificada: si se rompiera la
-      // codificacion, PowerShell arrancaria con un error y sin anunciar carpeta.
+      // La integracion del prompt va en claro con -Command y sin comillas
+      // dobles (una sola rompe la linea de comandos), y nunca con
+      // -EncodedCommand: Kaspersky lo toma por malware y borra el .exe.
       const ps = SHELLS.find((s) => s.key === 'powershell' || s.key === 'pwsh');
-      const encoded = ps ? ps.args[ps.args.indexOf('-EncodedCommand') + 1] : '';
-      const decoded = encoded ? Buffer.from(encoded, 'base64').toString('utf16le') : '';
+      const psScript = ps ? ps.args[ps.args.indexOf('-Command') + 1] || '' : '';
+      const promptOk = psScript === PS_INTEGRATION_SCRIPT && psScript.includes(']9;9;') &&
+        !psScript.includes('"') && !ps.args.includes('-EncodedCommand');
       result.checks.push({
         name: 'integracion del prompt',
-        ok: decoded === PS_INTEGRATION_SCRIPT && decoded.includes(']9;9;') &&
-          ptyEnv().PROMPT.startsWith(CMD_PROMPT_PREFIX) && ptyEnv().PROMPT_COMMAND.includes(']9;9;'),
-        detail: decoded === PS_INTEGRATION_SCRIPT
-          ? 'PowerShell (-EncodedCommand), cmd (PROMPT) y Git Bash (PROMPT_COMMAND) anuncian su carpeta'
-          : 'el script de PowerShell no sobrevive a la codificacion',
+        ok: promptOk && ptyEnv().PROMPT.startsWith(CMD_PROMPT_PREFIX) && ptyEnv().PROMPT_COMMAND.includes(']9;9;'),
+        detail: promptOk
+          ? 'PowerShell (-Command en claro), cmd (PROMPT) y Git Bash (PROMPT_COMMAND) anuncian su carpeta'
+          : 'el script de PowerShell lleva comillas dobles o -EncodedCommand',
       });
 
       const python = findPython();
