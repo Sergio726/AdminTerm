@@ -11,8 +11,12 @@
 <body>
 
   <header id="toolbar">
-    <div id="tabs" role="tablist" aria-label="Pestanas de terminal"></div>
-    <button id="btn-new-tab" class="icon-btn" title="Nueva pestana (Ctrl+Shift+T)" aria-label="Nueva pestana">+</button>
+    <div id="tabs-strip">
+      <button id="tabs-prev" class="tabs-scroll" title="Pestanas anteriores" aria-label="Pestanas anteriores" hidden>&#8249;</button>
+      <div id="tabs" role="tablist" aria-label="Pestanas de terminal"></div>
+      <button id="tabs-next" class="tabs-scroll" title="Pestanas siguientes" aria-label="Pestanas siguientes" hidden>&#8250;</button>
+    </div>
+    <button id="btn-new-tab" class="icon-btn" title="Nueva pestana (Ctrl+Shift+T). Clic derecho: lista de pestanas abiertas" aria-label="Nueva pestana">+</button>
 
     <div class="group" role="group" aria-label="Dividir">
       <button id="btn-split-right" class="icon-btn" title="Dividir a la derecha (Alt+Shift++)" aria-label="Dividir a la derecha">&#9704;</button>
@@ -37,12 +41,17 @@
       <span class="ico">&#127908;</span><span class="lbl">Micro</span>
     </button>
 
+    <button id="btn-recent" class="icon-btn" title="Proyectos recientes (Ctrl+Shift+R)" aria-label="Proyectos recientes">&#128337;</button>
+
     <button id="btn-help" class="icon-btn" title="Ayuda: atajos y comandos de la shell (F1)" aria-label="Ayuda">?</button>
 
     <button id="btn-settings" class="icon-btn" title="Ajustes (Ctrl+,)" aria-label="Ajustes">&#9881;</button>
   </header>
 
   <main id="terminals"></main>
+
+  <!-- Clic derecho en "+": todas las pestanas abiertas, aunque no quepan en la barra. -->
+  <div id="tab-menu" role="menu" aria-label="Pestanas abiertas" hidden></div>
 
   <div id="search-bar" hidden>
     <input id="search-input" type="text" placeholder="Buscar en el terminal..." aria-label="Buscar" />
@@ -186,6 +195,15 @@
             <span>Recordar tamano y posicion de la ventana</span>
           </label>
           <label class="row check">
+            <input id="set-showRecentOnStart" type="checkbox" />
+            <span>Mostrar los proyectos recientes al iniciar</span>
+          </label>
+          <p class="hint">
+            Cada shell anuncia en que carpeta esta (PowerShell, cmd y Git Bash). Con eso
+            AdminTerm recuerda en que proyectos has trabajado y reabre cada pestana en su
+            carpeta. La lista esta siempre en el boton &#128337; o con Ctrl+Shift+R.
+          </p>
+          <label class="row check">
             <input id="set-globalHotkeyEnabled" type="checkbox" />
             <span>Atajo global para mostrar/ocultar AdminTerm</span>
           </label>
@@ -278,6 +296,7 @@
             <li><kbd>Alt</kbd>+<kbd>&larr;</kbd><kbd>&rarr;</kbd><kbd>&uarr;</kbd><kbd>&darr;</kbd> moverse entre paneles</li>
             <li><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>W</kbd> cerrar el panel activo</li>
             <li><kbd>Ctrl</kbd>+<kbd>Tab</kbd> / <kbd>Ctrl</kbd>+<kbd>1..9</kbd> cambiar de pestana</li>
+            <li><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>R</kbd> proyectos recientes</li>
             <li><kbd>Ctrl</kbd>+<kbd>V</kbd> o <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>V</kbd> pegar</li>
             <li><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>C</kbd> copiar</li>
             <li><kbd>Ctrl</kbd>+<kbd>X</kbd> / <kbd>Supr</kbd> cortar o borrar lo seleccionado</li>
@@ -326,6 +345,8 @@
             <li><kbd>Alt</kbd>+<kbd>&larr;</kbd><kbd>&rarr;</kbd><kbd>&uarr;</kbd><kbd>&darr;</kbd> moverse entre paneles</li>
             <li><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>W</kbd> cerrar el panel activo (o la pestana si es el ultimo)</li>
             <li><kbd>Ctrl</kbd>+<kbd>Tab</kbd> / <kbd>Ctrl</kbd>+<kbd>1..9</kbd> cambiar de pestana</li>
+            <li>Clic derecho en <kbd>+</kbd>: lista de todas las pestanas abiertas, aunque no quepan en la barra</li>
+            <li><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>R</kbd> proyectos recientes (abrir una pestana en esa carpeta)</li>
             <li><kbd>Ctrl</kbd>+<kbd>V</kbd> o <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>V</kbd> pegar</li>
             <li><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>C</kbd> copiar (<kbd>Ctrl</kbd>+<kbd>C</kbd> queda libre para las CLI)</li>
             <li><kbd>Ctrl</kbd>+<kbd>X</kbd> / <kbd>Supr</kbd> cortar o borrar lo seleccionado con el raton, en la linea que escribes</li>
@@ -352,6 +373,34 @@
       <footer class="modal-foot">
         <span class="spacer"></span>
         <button id="help-done" class="primary">Listo</button>
+      </footer>
+    </div>
+  </div>
+
+  <div id="recent-modal" hidden>
+    <div class="modal-backdrop" data-close="1"></div>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="recent-title">
+      <header class="modal-head">
+        <h2 id="recent-title">Proyectos recientes</h2>
+        <button id="recent-close" class="icon-btn" aria-label="Cerrar">&times;</button>
+      </header>
+
+      <div class="modal-body">
+        <p class="hint">
+          Carpetas en las que has trabajado, la mas reciente primero. Pulsa una para abrir
+          una pestana nueva en esa carpeta. Con <kbd>Esc</kbd> sigues donde estabas.
+        </p>
+        <div id="recent-list" class="recent-list"></div>
+      </div>
+
+      <footer class="modal-foot">
+        <label class="row check compact">
+          <input id="recent-show-on-start" type="checkbox" />
+          <span>Mostrar al iniciar</span>
+        </label>
+        <span class="spacer"></span>
+        <button id="recent-pick" class="ghost">Elegir carpeta...</button>
+        <button id="recent-done" class="primary">Cerrar</button>
       </footer>
     </div>
   </div>

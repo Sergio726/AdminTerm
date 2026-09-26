@@ -69,19 +69,47 @@ body {
   min-height: 40px;
 }
 
+/* La tira de pestanas ocupa lo que dejan libre los botones de la derecha y
+   nunca crece por encima: si no caben, se desplaza y aparecen las flechas. */
+#tabs-strip {
+  display: flex;
+  align-items: center;
+  flex: 0 1 auto;
+  min-width: 0;
+}
 #tabs {
   display: flex;
   align-items: center;
   gap: 4px;
+  flex: 0 1 auto;
+  min-width: 0;
   overflow-x: auto;
   scrollbar-width: none;
-  max-width: 46vw;
 }
 #tabs::-webkit-scrollbar { display: none; }
+.tabs-scroll {
+  flex: 0 0 auto;
+  border: 1px solid var(--border);
+  background: var(--bg-elev);
+  color: var(--fg);
+  border-radius: var(--radius);
+  width: 22px;
+  height: 27px;
+  padding: 0;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 16px;
+  line-height: 1;
+}
+.tabs-scroll:hover { border-color: var(--accent); }
+.tabs-scroll:disabled { opacity: 0.35; cursor: default; border-color: var(--border); }
+#tabs-prev { margin-right: 4px; }
+#tabs-next { margin-left: 4px; }
 
 .tab {
   display: flex;
   align-items: center;
+  flex: 0 0 auto;
   gap: 7px;
   padding: 5px 8px 5px 11px;
   border: 1px solid transparent;
@@ -288,7 +316,7 @@ body.resizing-panes .xterm { pointer-events: none; }
 
 /* ------------------------------------------------------------- overlays */
 
-#drop-overlay, #mic-overlay, #settings-modal, #help-modal {
+#drop-overlay, #mic-overlay, #settings-modal, #help-modal, #recent-modal {
   position: fixed;
   inset: 0;
   z-index: 50;
@@ -440,6 +468,121 @@ kbd {
   font-family: ui-monospace, Consolas, monospace;
   font-size: 11px;
   color: var(--fg);
+}
+
+/* ---------------------------------------------------- proyectos recientes */
+
+.row.compact { padding: 0; }
+.recent-list { display: flex; flex-direction: column; gap: 2px; }
+.recent-empty { color: var(--fg-dim); padding: 18px 0; text-align: center; }
+.recent-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  grid-template-areas: "name when remove" "path when remove";
+  align-items: center;
+  column-gap: 12px;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  color: var(--fg);
+  font: inherit;
+  padding: 6px 8px;
+  cursor: pointer;
+}
+.recent-row:hover, .recent-row:focus-visible {
+  background: var(--bg-elev);
+  border-color: var(--accent);
+  outline: none;
+}
+.recent-name { grid-area: name; font-weight: 600; font-size: 13px; }
+.recent-path {
+  grid-area: path;
+  color: var(--fg-dim);
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 11.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.recent-when { grid-area: when; color: var(--fg-dim); font-size: 11.5px; white-space: nowrap; }
+.recent-remove {
+  grid-area: remove;
+  border: 0;
+  background: transparent;
+  color: var(--fg-dim);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  padding: 3px 6px;
+  opacity: 0.6;
+}
+.recent-remove:hover { opacity: 1; color: var(--danger); background: rgba(255, 107, 107, 0.16); }
+
+/* --------------------------------------------- menu de pestanas abiertas */
+
+#tab-menu {
+  position: fixed;
+  z-index: 55;
+  min-width: 260px;
+  max-width: min(520px, 90vw);
+  max-height: 70vh;
+  overflow-y: auto;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 12px 34px rgba(0, 0, 0, 0.5);
+  padding: 4px;
+}
+.tab-menu-head {
+  padding: 5px 9px 6px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--accent-2);
+}
+.tab-menu-item {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  grid-template-areas: "index title" "index path";
+  column-gap: 8px;
+  align-items: center;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  color: var(--fg-dim);
+  font: inherit;
+  padding: 5px 8px;
+  cursor: pointer;
+}
+.tab-menu-item:hover, .tab-menu-item:focus-visible {
+  background: var(--bg-chrome);
+  border-color: var(--accent);
+  color: var(--fg);
+  outline: none;
+}
+.tab-menu-item.active { color: var(--fg); font-weight: 600; }
+.tab-menu-item.waiting .tab-menu-title::before { content: "● "; color: var(--accent); font-size: 8px; vertical-align: middle; }
+.tab-menu-item.dead .tab-menu-title { text-decoration: line-through; opacity: 0.6; }
+.tab-menu-index {
+  grid-area: index;
+  color: var(--fg-dim);
+  font-variant-numeric: tabular-nums;
+  font-size: 11.5px;
+  text-align: right;
+}
+.tab-menu-title { grid-area: title; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tab-menu-path {
+  grid-area: path;
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 11px;
+  color: var(--fg-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* --------------------------------------------------------- search + toast */
