@@ -1308,6 +1308,8 @@ const POWERSHELL_HELP = {
     ['Get-Help ls -Online', 'Abre la documentacion completa en el navegador.'],
     ['Get-Alias', 'Atajos ya definidos: ls, dir, cat, cd...'],
     ['Get-History', 'Los comandos que has escrito en esta sesion.'],
+    ['codex --no-daemon', 'Lanza Codex CLI sin daemon (necesario desde AdminTerm elevado).'],
+    ['codex daemon stop', 'Detiene el daemon de Codex (si queda atrapado con permisos elevados).'],
   ],
   tip: 'Escribe las primeras letras y pulsa Tab para completar, o Ctrl+Espacio para ver todas las opciones.',
 };
@@ -1322,6 +1324,8 @@ const BASH_HELP = {
     ['type -a git', 'Que es un nombre: programa, alias o funcion, y donde vive.'],
     ['alias', 'Atajos definidos en tu configuracion.'],
     ['history', 'Los comandos que has escrito.'],
+    ['codex --no-daemon', 'Lanza Codex CLI sin daemon (necesario desde AdminTerm elevado).'],
+    ['codex daemon stop', 'Detiene el daemon de Codex (si queda atrapado con permisos elevados).'],
   ],
   tip: 'Pulsa Tab dos veces con la linea vacia para que bash liste todo lo ejecutable.',
 };
